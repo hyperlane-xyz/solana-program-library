@@ -12,10 +12,10 @@ use {
 /// Maximum bit length of any deposit or transfer amount
 ///
 /// Any deposit or transfer amount must be less than 2^48
-pub const MAXIMUM_DEPOSIT_TRANSFER_AMOUNT_BIT_LENGTH: usize = 48;
+pub const MAXIMUM_DEPOSIT_TRANSFER_AMOUNT: u64 = (2 << 48) - 1;
 
-/// Default maximum pending balance credit counter set to 2^16
-pub const MAXIMUM_PENDING_BALANCE_CREDIT_COUNTER: u64 = 65536;
+/// Default maximum pending balance credit counter
+pub const MAXIMUM_PENDING_BALANCE_CREDIT_COUNTER: u64 = 2 << 16;
 
 /// Bit length of the low bits of pending balance plaintext
 pub const PENDING_BALANCE_LO_BIT_LENGTH: usize = 16;
