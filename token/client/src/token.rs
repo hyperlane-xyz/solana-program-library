@@ -26,7 +26,7 @@ use {
         },
         instruction, offchain,
         solana_zk_token_sdk::encryption::{
-            auth_encryption::AeKey,
+            auth_encryption::{AeCiphertext, AeKey},
             elgamal::{ElGamalKeypair, ElGamalSecretKey},
         },
         solana_zk_token_sdk::{errors::ProofError, zk_token_elgamal::pod::ElGamalPubkey},
@@ -2022,55 +2022,71 @@ where
 
     /// Applies the confidential transfer pending balance to the available balance using the
     /// uniquely derived decryption key
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_apply_pending_balance<S: Signer>(
+    pub async fn confidential_transfer_apply_pending_balance<S: Signers>(
         &self,
-        token_account: &Pubkey,
-        authority: &S,
-        available_balance: u64,
-        pending_balance: u64,
-        expected_pending_balance_credit_counter: u64,
+        account: &Pubkey,
+        authority: &Pubkey,
+        update_data: Option<(u64, &AeCiphertext)>,
+        decryption_keys: Option<(&ElGamalSecretKey, &AeKey)>,
+        signing_keypairs: &S,
     ) -> TokenResult<T::Output> {
-        let authenticated_encryption_key =
-            AeKey::new(authority, token_account).map_err(TokenError::Key)?;
+        let signing_pubkeys = signing_keypairs.pubkeys();
+        let multisig_signers = self.get_multisig_signers(authority, &signing_pubkeys);
 
-        self.confidential_transfer_apply_pending_balance_with_key(
-            token_account,
-            authority,
-            available_balance,
-            pending_balance,
-            expected_pending_balance_credit_counter,
-            &authenticated_encryption_key,
-        )
-        .await
-    }
+        let (expected_pending_balance_credit_counter, new_decryptable_available_balance) =
+            match update_data {
+                Some((
+                    expected_pending_balance_credit_counter,
+                    new_decryptable_available_balance,
+                )) => (
+                    expected_pending_balance_credit_counter,
+                    new_decryptable_available_balance.clone(),
+                ),
+                _ => {
+                    let account_state = self.get_account_info(account).await?;
+                    let confidential_transfer_account_info = ConfidentialTransferAccountInfo(
+                        account_state
+                            .get_extension::<confidential_transfer::ConfidentialTransferAccount>(
+                            )?,
+                    );
 
-    /// Applies the confidential transfer pending balance to the available balance using a custom
-    /// decryption key
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_apply_pending_balance_with_key<S: Signer>(
-        &self,
-        token_account: &Pubkey,
-        authority: &S,
-        available_balance: u64,
-        pending_balance: u64,
-        expected_pending_balance_credit_counter: u64,
-        authenticated_encryption_key: &AeKey,
-    ) -> TokenResult<T::Output> {
-        let new_decryptable_balance = available_balance.checked_add(pending_balance).unwrap();
-        let new_decryptable_balance_ciphertext =
-            authenticated_encryption_key.encrypt(new_decryptable_balance);
+                    let expected_pending_balance_credit_counter =
+                        confidential_transfer_account_info
+                            .get_actual_pending_balance_credit_counter();
+
+                    let new_decryptable_available_balance =
+                        if let Some((elgamal_secret_key, aes_key)) = decryption_keys {
+                            let pending_balance = confidential_transfer_account_info
+                                .decrypted_pending_balance(elgamal_secret_key)?;
+                            let current_decryptable_available_balance =
+                                confidential_transfer_account_info
+                                    .decrypted_available_balance(aes_key)?;
+                            aes_key.encrypt(
+                                current_decryptable_available_balance
+                                    .checked_add(pending_balance)
+                                    .unwrap(),
+                            )
+                        } else {
+                            return Err(TokenError::EncryptionKey);
+                        };
+
+                    (
+                        expected_pending_balance_credit_counter,
+                        new_decryptable_available_balance,
+                    )
+                }
+            };
 
         self.process_ixs(
             &[confidential_transfer::instruction::apply_pending_balance(
                 &self.program_id,
-                token_account,
+                account,
                 expected_pending_balance_credit_counter,
-                new_decryptable_balance_ciphertext,
-                &authority.pubkey(),
-                &[],
+                new_decryptable_available_balance,
+                authority,
+                &multisig_signers,
             )?],
-            &[authority],
+            signing_keypairs,
         )
         .await
     }
@@ -2396,7 +2412,7 @@ impl<'a> ConfidentialTransferAccountInfo<'a> {
             .ok_or(TokenError::AccountDecryption)
     }
 
-    fn get_expected_pending_balance_credit_counter(&self) -> u64 {
-        self.0.expected_pending_balance_credit_counter.into()
+    fn get_actual_pending_balance_credit_counter(&self) -> u64 {
+        self.0.actual_pending_balance_credit_counter.into()
     }
 }

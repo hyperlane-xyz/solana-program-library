@@ -891,8 +891,16 @@ async fn confidential_transfer_deposit() {
         )))
     );
 
+    let pending_balance_amount = MAXIMUM_DEPOSIT_TRANSFER_AMOUNT.checked_add(65537).unwrap();
+    let new_decryptable_available_balance = alice_meta.aes_key.encrypt(pending_balance_amount);
     token
-        .confidential_transfer_apply_pending_balance(&alice_meta.token_account, &alice, 0, 65537, 2)
+        .confidential_transfer_apply_pending_balance(
+            &alice_meta.token_account,
+            &alice.pubkey(),
+            Some((3_u64, &new_decryptable_available_balance)),
+            None,
+            &[&alice],
+        )
         .await
         .unwrap();
 
@@ -904,8 +912,23 @@ async fn confidential_transfer_deposit() {
         .get_extension::<ConfidentialTransferAccount>()
         .unwrap();
     assert_eq!(extension.pending_balance_credit_counter, 0.into());
-    assert_eq!(extension.expected_pending_balance_credit_counter, 2.into());
-    assert_eq!(extension.actual_pending_balance_credit_counter, 2.into());
+    assert_eq!(extension.expected_pending_balance_credit_counter, 3.into());
+    assert_eq!(extension.actual_pending_balance_credit_counter, 3.into());
+
+    token
+        .confidential_transfer_apply_pending_balance(
+            &alice_meta.token_account,
+            &alice.pubkey(),
+            None,
+            Some((alice_meta.elgamal_keypair.secret(), &alice_meta.aes_key)),
+            &[&alice],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(extension.pending_balance_credit_counter, 0.into());
+    assert_eq!(extension.expected_pending_balance_credit_counter, 3.into());
+    assert_eq!(extension.actual_pending_balance_credit_counter, 3.into());
 }
 
 #[cfg(all(feature = "zk-ops", feature = "proof-program"))]
