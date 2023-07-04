@@ -10,7 +10,7 @@ use {
         program_error::ProgramError,
         program_pack::Pack,
         pubkey::Pubkey,
-        signer::{signers::Signers, Signer, SignerError},
+        signer::{signers::Signers, Signer},
         system_instruction,
         transaction::Transaction,
     },
@@ -25,7 +25,10 @@ use {
             ExtensionType, StateWithExtensionsOwned,
         },
         instruction, offchain,
-        solana_zk_token_sdk::encryption::{auth_encryption::AeKey, elgamal::ElGamalKeypair},
+        solana_zk_token_sdk::encryption::{
+            auth_encryption::AeKey,
+            elgamal::{ElGamalKeypair, ElGamalSecretKey},
+        },
         solana_zk_token_sdk::{errors::ProofError, zk_token_elgamal::pod::ElGamalPubkey},
         state::{Account, AccountState, Mint, Multisig},
     },
@@ -67,7 +70,7 @@ pub enum TokenError {
     #[error("maximum deposit transfer amount exceeded")]
     MaximumDepositTransferAmountExceeded,
     #[error("encryption key error")]
-    Key(SignerError),
+    EncryptionKey,
     #[error("account decryption failed")]
     AccountDecryption,
     #[error("not enough funds in account")]
@@ -1715,191 +1718,6 @@ where
         .await
     }
 
-    /// Fetch and decrypt the available balance of a confidential token account using the uniquely
-    /// derived decryption key from a signer
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_available_balance<S: Signer>(
-        &self,
-        token_account: &Pubkey,
-        authority: &S,
-    ) -> TokenResult<u64> {
-        let authenticated_encryption_key =
-            AeKey::new(authority, token_account).map_err(TokenError::Key)?;
-
-        self.confidential_transfer_get_available_balance_with_key(
-            token_account,
-            &authenticated_encryption_key,
-        )
-        .await
-    }
-
-    /// Fetch and decrypt the available balance of a confidential token account using a custom
-    /// decryption key
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_available_balance_with_key(
-        &self,
-        token_account: &Pubkey,
-        authenticated_encryption_key: &AeKey,
-    ) -> TokenResult<u64> {
-        let state = self.get_account_info(token_account).await.unwrap();
-        let extension =
-            state.get_extension::<confidential_transfer::ConfidentialTransferAccount>()?;
-
-        let decryptable_balance_ciphertext: AeCiphertext = extension
-            .decryptable_available_balance
-            .try_into()
-            .map_err(TokenError::Proof)?;
-        let decryptable_balance = decryptable_balance_ciphertext
-            .decrypt(authenticated_encryption_key)
-            .ok_or(TokenError::AccountDecryption)?;
-
-        Ok(decryptable_balance)
-    }
-
-    /// Fetch and decrypt the pending balance of a confidential token account using the uniquely
-    /// derived decryption key from a signer
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_pending_balance<S: Signer>(
-        &self,
-        token_account: &Pubkey,
-        authority: &S,
-    ) -> TokenResult<u64> {
-        let elgamal_keypair =
-            ElGamalKeypair::new(authority, token_account).map_err(TokenError::Key)?;
-
-        self.confidential_transfer_get_pending_balance_with_key(token_account, &elgamal_keypair)
-            .await
-    }
-
-    /// Fetch and decrypt the pending balance of a confidential token account using a custom
-    /// decryption key
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_pending_balance_with_key(
-        &self,
-        token_account: &Pubkey,
-        elgamal_keypair: &ElGamalKeypair,
-    ) -> TokenResult<u64> {
-        let state = self.get_account_info(token_account).await.unwrap();
-        let extension =
-            state.get_extension::<confidential_transfer::ConfidentialTransferAccount>()?;
-
-        // decrypt pending balance
-        let pending_balance_lo = extension
-            .pending_balance_lo
-            .decrypt(&elgamal_keypair.secret)
-            .ok_or(TokenError::AccountDecryption)?;
-        let pending_balance_hi = extension
-            .pending_balance_hi
-            .decrypt(&elgamal_keypair.secret)
-            .ok_or(TokenError::AccountDecryption)?;
-
-        let pending_balance = pending_balance_lo
-            .checked_add(pending_balance_hi << confidential_transfer::PENDING_BALANCE_HI_BIT_LENGTH)
-            .ok_or(TokenError::AccountDecryption)?;
-
-        Ok(pending_balance)
-    }
-
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_withheld_amount<S: Signer>(
-        &self,
-        withdraw_withheld_authority: &S,
-        sources: &[&Pubkey],
-    ) -> TokenResult<u64> {
-        let withdraw_withheld_authority_elgamal_keypair =
-            ElGamalKeypair::new(withdraw_withheld_authority, &self.pubkey)
-                .map_err(TokenError::Key)?;
-
-        self.confidential_transfer_get_withheld_amount_with_key(
-            &withdraw_withheld_authority_elgamal_keypair,
-            sources,
-        )
-        .await
-    }
-
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_withheld_amount_with_key(
-        &self,
-        withdraw_withheld_authority_elgamal_keypair: &ElGamalKeypair,
-        sources: &[&Pubkey],
-    ) -> TokenResult<u64> {
-        let mut aggregate_withheld_amount_ciphertext = ElGamalCiphertext::default();
-        for &source in sources {
-            let state = self.get_account_info(source).await.unwrap();
-            let extension =
-                state.get_extension::<confidential_transfer::ConfidentialTransferAccount>()?;
-
-            let withheld_amount_ciphertext: ElGamalCiphertext =
-                extension.withheld_amount.try_into().unwrap();
-
-            aggregate_withheld_amount_ciphertext =
-                aggregate_withheld_amount_ciphertext + withheld_amount_ciphertext;
-        }
-
-        let aggregate_withheld_amount = aggregate_withheld_amount_ciphertext
-            .decrypt_u32(&withdraw_withheld_authority_elgamal_keypair.secret)
-            .ok_or(TokenError::AccountDecryption)?;
-
-        Ok(aggregate_withheld_amount)
-    }
-
-    /// Fetch the ElGamal public key associated with a confidential token account
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_elgamal_pubkey<S: Signer>(
-        &self,
-        token_account: &Pubkey,
-    ) -> TokenResult<ElGamalPubkey> {
-        let state = self.get_account_info(token_account).await.unwrap();
-        let extension =
-            state.get_extension::<confidential_transfer::ConfidentialTransferAccount>()?;
-        let elgamal_pubkey = extension
-            .elgamal_pubkey
-            .try_into()
-            .map_err(TokenError::Proof)?;
-
-        Ok(elgamal_pubkey)
-    }
-
-    /// Fetch the ElGamal pubkey key of the auditor associated with a confidential token mint
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_auditor_elgamal_pubkey<S: Signer>(
-        &self,
-    ) -> TokenResult<Option<ElGamalPubkey>> {
-        let mint_state = self.get_mint_info().await.unwrap();
-        let ct_mint =
-            mint_state.get_extension::<confidential_transfer::ConfidentialTransferMint>()?;
-        let auditor_elgamal_pubkey: Option<ElGamalPubkey> = ct_mint.auditor_elgamal_pubkey.into();
-
-        if let Some(elgamal_pubkey) = auditor_elgamal_pubkey {
-            let elgamal_pubkey: ElGamalPubkey =
-                elgamal_pubkey.try_into().map_err(TokenError::Proof)?;
-            Ok(Some(elgamal_pubkey))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Fetch the ElGamal pubkey key of the withdraw withheld authority associated with a
-    /// confidential token mint
-    #[cfg(feature = "proof-program")]
-    pub async fn confidential_transfer_get_withdraw_withheld_authority_elgamal_pubkey<S: Signer>(
-        &self,
-    ) -> TokenResult<Option<ElGamalPubkey>> {
-        let mint_state = self.get_mint_info().await.unwrap();
-        let ct_mint =
-            mint_state.get_extension::<confidential_transfer::ConfidentialTransferMint>()?;
-        let withdraw_withheld_authority_elgamal_pubkey: Option<ElGamalPubkey> =
-            ct_mint.withdraw_withheld_authority_elgamal_pubkey.into();
-
-        if let Some(elgamal_pubkey) = withdraw_withheld_authority_elgamal_pubkey {
-            let elgamal_pubkey: ElGamalPubkey =
-                elgamal_pubkey.try_into().map_err(TokenError::Proof)?;
-            Ok(Some(elgamal_pubkey))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Deposit SPL Tokens into the pending balance of a confidential token account
     pub async fn confidential_transfer_deposit<S: Signers>(
         &self,
@@ -2518,5 +2336,67 @@ where
             signing_keypairs,
         )
         .await
+    }
+}
+
+struct ConfidentialTransferAccountInfo<'a>(&'a confidential_transfer::ConfidentialTransferAccount);
+impl<'a> ConfidentialTransferAccountInfo<'a> {
+    fn combine_balances(balance_lo: u64, balance_hi: u64) -> Option<u64> {
+        balance_hi
+            .checked_shl(confidential_transfer::PENDING_BALANCE_LO_BIT_LENGTH)?
+            .checked_add(balance_lo)
+    }
+
+    fn decrypted_pending_balance_lo(
+        &self,
+        elgamal_secret_key: &ElGamalSecretKey,
+    ) -> Result<u64, TokenError> {
+        let pending_balance_lo = self
+            .0
+            .pending_balance_lo
+            .try_into()
+            .map_err(|_| TokenError::AccountDecryption)?;
+        elgamal_secret_key
+            .decrypt_u32(&pending_balance_lo)
+            .ok_or(TokenError::AccountDecryption)
+    }
+
+    fn decrypted_pending_balance_hi(
+        &self,
+        elgamal_secret_key: &ElGamalSecretKey,
+    ) -> Result<u64, TokenError> {
+        let pending_balance_hi = self
+            .0
+            .pending_balance_hi
+            .try_into()
+            .map_err(|_| TokenError::AccountDecryption)?;
+        elgamal_secret_key
+            .decrypt_u32(&pending_balance_hi)
+            .ok_or(TokenError::AccountDecryption)
+    }
+
+    fn decrypted_pending_balance(
+        &self,
+        elgamal_secret_key: &ElGamalSecretKey,
+    ) -> Result<u64, TokenError> {
+        let decrypted_pending_balance_lo = self.decrypted_pending_balance_lo(elgamal_secret_key)?;
+        let decrypted_pending_balance_hi = self.decrypted_pending_balance_hi(elgamal_secret_key)?;
+        Self::combine_balances(decrypted_pending_balance_lo, decrypted_pending_balance_hi)
+            .ok_or(TokenError::AccountDecryption)
+    }
+
+    fn decrypted_available_balance(&self, aes_key: &AeKey) -> Result<u64, TokenError> {
+        let decryptable_available_balance = self
+            .0
+            .decryptable_available_balance
+            .try_into()
+            .map_err(|_| TokenError::AccountDecryption)?;
+        aes_key
+            .decrypt(&decryptable_available_balance)
+            .ok_or(TokenError::AccountDecryption)
+    }
+
+    fn get_expected_pending_balance_credit_counter(&self) -> u64 {
+        self.0.expected_pending_balance_credit_counter.into()
     }
 }

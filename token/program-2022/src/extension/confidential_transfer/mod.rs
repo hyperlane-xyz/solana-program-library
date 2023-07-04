@@ -18,9 +18,7 @@ pub const MAXIMUM_DEPOSIT_TRANSFER_AMOUNT: u64 = (2 << 48) - 1;
 pub const MAXIMUM_PENDING_BALANCE_CREDIT_COUNTER: u64 = 2 << 16;
 
 /// Bit length of the low bits of pending balance plaintext
-pub const PENDING_BALANCE_LO_BIT_LENGTH: usize = 16;
-/// Bit length of the high bits of pending balance plaintext
-pub const PENDING_BALANCE_HI_BIT_LENGTH: usize = 48;
+pub const PENDING_BALANCE_LO_BIT_LENGTH: u32 = 16;
 
 /// Confidential Transfer Extension instructions
 pub mod instruction;
