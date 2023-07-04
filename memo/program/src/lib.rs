@@ -1,3 +1,4 @@
+#![allow(warnings)]
 #![deny(missing_docs)]
 
 //! A program that accepts a string of encoded characters and verifies that it parses,
