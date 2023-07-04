@@ -185,6 +185,12 @@ fn get_first_extension_type(tlv_data: &[u8]) -> Result<Option<ExtensionType>, Pr
 
 fn check_min_len_and_not_multisig(input: &[u8], minimum_len: usize) -> Result<(), ProgramError> {
     if input.len() == Multisig::LEN || input.len() < minimum_len {
+        solana_program::msg!(
+            "input.len()={}, MultiSig::LEN={}, minimum_len={}",
+            input.len(),
+            Multisig::LEN,
+            minimum_len,
+        ); // FIXME remove
         Err(ProgramError::InvalidAccountData)
     } else {
         Ok(())
@@ -381,14 +387,35 @@ impl<'data, S: BaseState> StateWithExtensionsMut<'data, S> {
     ///
     /// Fails if the base state is not initialized.
     pub fn unpack(input: &'data mut [u8]) -> Result<Self, ProgramError> {
-        check_min_len_and_not_multisig(input, S::LEN)?;
+        check_min_len_and_not_multisig(input, S::LEN)
+            .map_err(|err| {
+                solana_program::msg!("ERROR: {}:{}", file!(), line!()); // FIXME remove
+                err
+            })?;
         let (base_data, rest) = input.split_at_mut(S::LEN);
-        let base = S::unpack(base_data)?;
-        if let Some((account_type_index, tlv_start_index)) = type_and_tlv_indices::<S>(rest)? {
+        let base = S::unpack(base_data)
+            .map_err(|err| {
+                solana_program::msg!("ERROR: {}:{}", file!(), line!()); // FIXME remove
+                err
+            })?;
+        if let Some((account_type_index, tlv_start_index)) = type_and_tlv_indices::<S>(rest)
+            .map_err(|err| {
+                solana_program::msg!("ERROR: {}:{}", file!(), line!()); // FIXME remove
+                err
+            })?
+        {
             // type_and_tlv_indices() checks that returned indexes are within range
             let account_type = AccountType::try_from(rest[account_type_index])
-                .map_err(|_| ProgramError::InvalidAccountData)?;
-            check_account_type::<S>(account_type)?;
+                .map_err(|_| ProgramError::InvalidAccountData)
+                .map_err(|err| {
+                    solana_program::msg!("ERROR: {}:{}", file!(), line!()); // FIXME remove
+                    err
+                })?;
+            check_account_type::<S>(account_type)
+                .map_err(|err| {
+                    solana_program::msg!("ERROR: {}:{}", file!(), line!()); // FIXME remove
+                    err
+                })?;
             let (account_type, tlv_data) = rest.split_at_mut(tlv_start_index);
             Ok(Self {
                 base,

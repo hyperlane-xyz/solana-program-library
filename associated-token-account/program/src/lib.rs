@@ -1,3 +1,4 @@
+#![allow(warnings)]
 //! Convention for associating token accounts with a user wallet
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
