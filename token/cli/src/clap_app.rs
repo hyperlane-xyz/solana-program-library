@@ -645,15 +645,14 @@ pub fn app<'a, 'b>(
         .bench_subcommand()
         .subcommand(SubCommand::with_name(CommandName::CreateToken.into()).about("Create a new token")
                 .arg(
-                    Arg::with_name("token_keypair")
-                        .value_name("TOKEN_KEYPAIR")
-                        .validator(is_valid_signer)
+                    Arg::with_name("mint_account")
+                        .long("mint-account")
+                        .value_name("MINT_ACCOUNT")
+                        .validator(is_valid_pubkey)
                         .takes_value(true)
                         .index(1)
                         .help(
-                            "Specify the token keypair. \
-                             This may be a keypair file or the ASK keyword. \
-                             [default: randomly generated keypair]"
+                            "Specify the mint account address."
                         ),
                 )
                 .arg(

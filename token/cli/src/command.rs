@@ -3477,6 +3477,9 @@ pub async fn process_command<'a>(
             let memo = value_t!(arg_matches, "memo", String).ok();
             let rate_bps = value_t!(arg_matches, "interest_rate", i16).ok();
             let metadata_address = value_t!(arg_matches, "metadata_address", Pubkey).ok();
+            let mint_account = value_t!(arg_matches, "mint_account", Pubkey)
+                .ok()
+                .expect("Mint account is required");
             let group_address = value_t!(arg_matches, "group_address", Pubkey).ok();
             let member_address = value_t!(arg_matches, "member_address", Pubkey).ok();
 
@@ -3501,10 +3504,6 @@ pub async fn process_command<'a>(
                 .map(|v| (v, transfer_fee_maximum_fee.unwrap()))
                 .or(transfer_fee);
 
-            let (token_signer, token) =
-                get_signer(arg_matches, "token_keypair", &mut wallet_manager)
-                    .unwrap_or_else(new_throwaway_signer);
-            push_signer_with_dedup(token_signer, &mut bulk_signers);
             let default_account_state =
                 arg_matches
                     .value_of("default_account_state")
@@ -3523,7 +3522,7 @@ pub async fn process_command<'a>(
             command_create_token(
                 config,
                 decimals,
-                token,
+                mint_account,
                 mint_authority,
                 arg_matches.is_present("enable_freeze"),
                 arg_matches.is_present("enable_close"),
