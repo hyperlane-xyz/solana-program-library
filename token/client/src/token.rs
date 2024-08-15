@@ -189,6 +189,7 @@ pub enum ExtensionInitializationParams {
         member_address: Option<Pubkey>,
     },
 }
+
 impl ExtensionInitializationParams {
     /// Get the extension type associated with the init params
     pub fn extension(&self) -> ExtensionType {
@@ -699,41 +700,41 @@ where
     #[allow(clippy::too_many_arguments)]
     pub async fn create_mint<'a, S: Signers>(
         &self,
-        mint_authority: &'a Pubkey,
-        freeze_authority: Option<&'a Pubkey>,
         extension_initialization_params: Vec<ExtensionInitializationParams>,
         signing_keypairs: &S,
     ) -> TokenResult<T::Output> {
-        let decimals = self.decimals.ok_or(TokenError::MissingDecimals)?;
+        // let decimals = self.decimals.ok_or(TokenError::MissingDecimals)?;
 
-        let extension_types = extension_initialization_params
-            .iter()
-            .map(|e| e.extension())
-            .collect::<Vec<_>>();
-        let space = ExtensionType::try_calculate_account_len::<Mint>(&extension_types)?;
+        // let extension_types = extension_initialization_params
+        //     .iter()
+        //     .map(|e| e.extension())
+        //     .collect::<Vec<_>>();
+        // let space = ExtensionType::try_calculate_account_len::<Mint>(&extension_types)?;
 
-        let mut instructions = vec![system_instruction::create_account(
-            &self.payer.pubkey(),
-            &self.pubkey,
-            self.client
-                .get_minimum_balance_for_rent_exemption(space)
-                .await
-                .map_err(TokenError::Client)?,
-            space as u64,
-            &self.program_id,
-        )];
+        // let mut instructions = vec![system_instruction::create_account(
+        //     &self.payer.pubkey(),
+        //     &self.pubkey,
+        //     self.client
+        //         .get_minimum_balance_for_rent_exemption(space)
+        //         .await
+        //         .map_err(TokenError::Client)?,
+        //     space as u64,
+        //     &self.program_id,
+        // )];
+
+        let mut instructions = vec![];
 
         for params in extension_initialization_params {
             instructions.push(params.instruction(&self.program_id, &self.pubkey)?);
         }
 
-        instructions.push(instruction::initialize_mint(
-            &self.program_id,
-            &self.pubkey,
-            mint_authority,
-            freeze_authority,
-            decimals,
-        )?);
+        // instructions.push(instruction::initialize_mint(
+        //     &self.program_id,
+        //     &self.pubkey,
+        //     mint_authority,
+        //     freeze_authority,
+        //     decimals,
+        // )?);
 
         self.process_ixs(&instructions, signing_keypairs).await
     }

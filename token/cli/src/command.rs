@@ -230,7 +230,7 @@ enum Pointer {
 async fn command_create_token(
     config: &Config<'_>,
     decimals: u8,
-    token_pubkey: Pubkey,
+    mint_account: Pubkey,
     authority: Pubkey,
     enable_freeze: bool,
     enable_close: bool,
@@ -254,11 +254,11 @@ async fn command_create_token(
         config,
         format!(
             "Creating token {} under program {}",
-            token_pubkey, config.program_id
+            mint_account, config.program_id
         ),
     );
 
-    let token = token_client_from_config(config, &token_pubkey, Some(decimals))?;
+    let token = token_client_from_config(config, &mint_account, Some(decimals))?;
 
     let freeze_authority = if enable_freeze { Some(authority) } else { None };
 
@@ -341,7 +341,7 @@ async fn command_create_token(
     // CLI checks that only one is set
     if metadata_address.is_some() || enable_metadata {
         let metadata_address = if enable_metadata {
-            Some(token_pubkey)
+            Some(mint_account)
         } else {
             metadata_address
         };
@@ -353,7 +353,7 @@ async fn command_create_token(
 
     if group_address.is_some() || enable_group {
         let group_address = if enable_group {
-            Some(token_pubkey)
+            Some(mint_account)
         } else {
             group_address
         };
@@ -365,7 +365,7 @@ async fn command_create_token(
 
     if member_address.is_some() || enable_member {
         let member_address = if enable_member {
-            Some(token_pubkey)
+            Some(mint_account)
         } else {
             member_address
         };
@@ -375,14 +375,7 @@ async fn command_create_token(
         });
     }
 
-    let res = token
-        .create_mint(
-            &authority,
-            freeze_authority.as_ref(),
-            extensions,
-            &bulk_signers,
-        )
-        .await?;
+    let res = token.create_mint(extensions, &bulk_signers).await?;
 
     let tx_return = finish_tx(config, &res, false).await?;
 
@@ -391,7 +384,7 @@ async fn command_create_token(
             config,
             format!(
                 "To initialize metadata inside the mint, please run \
-                `spl-token initialize-metadata {token_pubkey} <YOUR_TOKEN_NAME> <YOUR_TOKEN_SYMBOL> <YOUR_TOKEN_URI>`, \
+                `spl-token initialize-metadata {mint_account} <YOUR_TOKEN_NAME> <YOUR_TOKEN_SYMBOL> <YOUR_TOKEN_URI>`, \
                 and sign with the mint authority.",
             ),
         );
@@ -401,7 +394,7 @@ async fn command_create_token(
         println_display(
             config,
             format!(
-                "To initialize group configurations inside the mint, please run `spl-token initialize-group {token_pubkey} <MAX_SIZE>`, and sign with the mint authority.",
+                "To initialize group configurations inside the mint, please run `spl-token initialize-group {mint_account} <MAX_SIZE>`, and sign with the mint authority.",
             ),
         );
     }
@@ -410,7 +403,7 @@ async fn command_create_token(
         println_display(
             config,
             format!(
-                "To initialize group member configurations inside the mint, please run `spl-token initialize-member {token_pubkey}`, and sign with the mint authority and the group's update authority.",
+                "To initialize group member configurations inside the mint, please run `spl-token initialize-member {mint_account}`, and sign with the mint authority and the group's update authority.",
             ),
         );
     }
@@ -418,7 +411,7 @@ async fn command_create_token(
     Ok(match tx_return {
         TransactionReturnData::CliSignature(cli_signature) => format_output(
             CliCreateToken {
-                address: token_pubkey.to_string(),
+                address: mint_account.to_string(),
                 decimals,
                 transaction_data: cli_signature,
             },
