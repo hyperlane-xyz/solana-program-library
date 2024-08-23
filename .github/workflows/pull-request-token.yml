@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Remove unneeded packages for more space
+        run: bash ./ci/warning/purge-ubuntu-runner.sh
+
       - name: Set env vars
         run: |
           source ci/rust-version.sh
@@ -143,7 +146,14 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
       - name: Build and test transfer hook example
-        run: ./ci/cargo-test-sbf.sh token/transfer-hook-example
+        run: ./ci/cargo-test-sbf.sh token/transfer-hook/example
+
+      - name: Upload program
+        uses: actions/upload-artifact@v2
+        with:
+          name: spl-transfer-hook-example
+          path: "target/deploy/*.so"
+          if-no-files-found: error
 
   cargo-test-sbf-associated-token-account:
     runs-on: ubuntu-latest
@@ -202,9 +212,12 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Remove unneeded packages for more space
+        run: bash ./ci/warning/purge-ubuntu-runner.sh
+
       - name: Set env vars
         run: |
-          echo "RUST_STABLE_VERSION=1.69.0" >> $GITHUB_ENV
+          echo "RUST_STABLE_VERSION=1.72.0" >> $GITHUB_ENV
           source ci/rust-version.sh
           echo "RUST_STABLE=$rust_stable" >> $GITHUB_ENV
           source ci/solana-version.sh
@@ -263,6 +276,11 @@ jobs:
         with:
           name: associated-token-account-program
           path: target/deploy
+      - name: Download spl-transfer-hook-example program
+        uses: actions/download-artifact@v2
+        with:
+          name: spl-transfer-hook-example
+          path: target/deploy
       - run: ./ci/js-test-token.sh
 
   cargo-build-test-cli:
@@ -305,3 +323,50 @@ jobs:
         run: |
           BUILD_DEPENDENT_PROGRAMS=1 cargo build --manifest-path ./token/cli/Cargo.toml
           cargo test --manifest-path ./token/cli/Cargo.toml
+
+  cargo-build-test-transfer-hook-cli:
+    runs-on: ubuntu-latest
+    needs: [cargo-test-sbf]
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set env vars
+        run: |
+          source ci/rust-version.sh
+          echo "RUST_STABLE=$rust_stable" >> $GITHUB_ENV
+          source ci/solana-version.sh
+          echo "SOLANA_VERSION=$solana_version" >> $GITHUB_ENV
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          override: true
+          profile: minimal
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-build-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_STABLE }}
+
+      - uses: actions/cache@v2
+        with:
+          path: ~/.cache/solana
+          key: solana-${{ env.SOLANA_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          ./ci/install-build-deps.sh
+          ./ci/install-program-deps.sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Download spl-transfer-hook-example program
+        uses: actions/download-artifact@v2
+        with:
+          name: spl-transfer-hook-example
+          path: target/deploy
+
+      - name: Build and test
+        run: |
+          cargo test --manifest-path ./token/transfer-hook/cli/Cargo.toml

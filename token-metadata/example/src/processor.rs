@@ -3,7 +3,7 @@
 use {
     solana_program::{
         account_info::{next_account_info, AccountInfo},
-        borsh::get_instance_packed_len,
+        borsh0_10::get_instance_packed_len,
         entrypoint::ProgramResult,
         msg,
         program::set_return_data,
@@ -11,16 +11,17 @@ use {
         program_option::COption,
         pubkey::Pubkey,
     },
+    spl_pod::optional_keys::OptionalNonZeroPubkey,
     spl_token_2022::{extension::StateWithExtensions, state::Mint},
     spl_token_metadata_interface::{
         error::TokenMetadataError,
         instruction::{
             Emit, Initialize, RemoveKey, TokenMetadataInstruction, UpdateAuthority, UpdateField,
         },
-        state::{OptionalNonZeroPubkey, TokenMetadata},
+        state::TokenMetadata,
     },
     spl_type_length_value::state::{
-        realloc_and_borsh_serialize, TlvState, TlvStateBorrowed, TlvStateMut,
+        realloc_and_pack_first_variable_len, TlvState, TlvStateBorrowed, TlvStateMut,
     },
 };
 
@@ -31,7 +32,7 @@ fn check_update_authority(
     if !update_authority_info.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
     }
-    let update_authority = Option::<Pubkey>::from(expected_update_authority.clone())
+    let update_authority = Option::<Pubkey>::from(*expected_update_authority)
         .ok_or(TokenMetadataError::ImmutableMetadata)?;
     if update_authority != *update_authority_info.key {
         return Err(TokenMetadataError::IncorrectUpdateAuthority.into());
@@ -83,8 +84,8 @@ pub fn process_initialize(
     // allocate a TLV entry for the space and write it in
     let mut buffer = metadata_info.try_borrow_mut_data()?;
     let mut state = TlvStateMut::unpack(&mut buffer)?;
-    state.alloc::<TokenMetadata>(instance_size)?;
-    state.borsh_serialize(&token_metadata)?;
+    state.alloc::<TokenMetadata>(instance_size, false)?;
+    state.pack_first_variable_len_value(&token_metadata)?;
 
     Ok(())
 }
@@ -104,7 +105,7 @@ pub fn process_update_field(
     let mut token_metadata = {
         let buffer = metadata_info.try_borrow_data()?;
         let state = TlvStateBorrowed::unpack(&buffer)?;
-        state.borsh_deserialize::<TokenMetadata>()?
+        state.get_first_variable_len_value::<TokenMetadata>()?
     };
 
     check_update_authority(update_authority_info, &token_metadata.update_authority)?;
@@ -113,7 +114,7 @@ pub fn process_update_field(
     token_metadata.update(data.field, data.value);
 
     // Update / realloc the account
-    realloc_and_borsh_serialize(metadata_info, &token_metadata)?;
+    realloc_and_pack_first_variable_len(metadata_info, &token_metadata)?;
 
     Ok(())
 }
@@ -133,14 +134,14 @@ pub fn process_remove_key(
     let mut token_metadata = {
         let buffer = metadata_info.try_borrow_data()?;
         let state = TlvStateBorrowed::unpack(&buffer)?;
-        state.borsh_deserialize::<TokenMetadata>()?
+        state.get_first_variable_len_value::<TokenMetadata>()?
     };
 
     check_update_authority(update_authority_info, &token_metadata.update_authority)?;
     if !token_metadata.remove_key(&data.key) && !data.idempotent {
         return Err(TokenMetadataError::KeyNotFound.into());
     }
-    realloc_and_borsh_serialize(metadata_info, &token_metadata)?;
+    realloc_and_pack_first_variable_len(metadata_info, &token_metadata)?;
 
     Ok(())
 }
@@ -160,13 +161,13 @@ pub fn process_update_authority(
     let mut token_metadata = {
         let buffer = metadata_info.try_borrow_data()?;
         let state = TlvStateBorrowed::unpack(&buffer)?;
-        state.borsh_deserialize::<TokenMetadata>()?
+        state.get_first_variable_len_value::<TokenMetadata>()?
     };
 
     check_update_authority(update_authority_info, &token_metadata.update_authority)?;
     token_metadata.update_authority = data.new_authority;
     // Update the account, no realloc needed!
-    realloc_and_borsh_serialize(metadata_info, &token_metadata)?;
+    realloc_and_pack_first_variable_len(metadata_info, &token_metadata)?;
 
     Ok(())
 }
@@ -182,7 +183,7 @@ pub fn process_emit(program_id: &Pubkey, accounts: &[AccountInfo], data: Emit) -
 
     let buffer = metadata_info.try_borrow_data()?;
     let state = TlvStateBorrowed::unpack(&buffer)?;
-    let metadata_bytes = state.get_bytes::<TokenMetadata>()?;
+    let metadata_bytes = state.get_first_bytes::<TokenMetadata>()?;
 
     if let Some(range) = TokenMetadata::get_slice(metadata_bytes, data.start, data.end) {
         set_return_data(range);

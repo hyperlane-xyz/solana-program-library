@@ -3,12 +3,15 @@ use {
         extension::{
             BaseState, BaseStateWithExtensions, Extension, ExtensionType, StateWithExtensionsMut,
         },
-        pod::{OptionalNonZeroPubkey, PodBool},
         state::Account,
     },
     bytemuck::{Pod, Zeroable},
     solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey},
+    spl_pod::{optional_keys::OptionalNonZeroPubkey, primitives::PodBool},
 };
+
+#[cfg(feature = "serde-traits")]
+use serde::{Deserialize, Serialize};
 
 /// Instructions for the TransferHook extension
 pub mod instruction;
@@ -17,6 +20,8 @@ pub mod processor;
 
 /// Transfer hook extension data for mints.
 #[repr(C)]
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct TransferHook {
     /// Authority that can set the transfer hook program id
@@ -26,6 +31,8 @@ pub struct TransferHook {
 }
 
 /// Indicates that the tokens from this account belong to a mint with a transfer hook
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct TransferHookAccount {

@@ -1,4 +1,4 @@
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 use {
     chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc},
     clap::{
@@ -250,8 +250,8 @@ fn unix_timestamp_to_string(unix_timestamp: UnixTimestamp) -> String {
     format!(
         "{} (UnixTimestamp: {})",
         match NaiveDateTime::from_timestamp_opt(unix_timestamp, 0) {
-            Some(ndt) =>
-                DateTime::<Utc>::from_utc(ndt, Utc).to_rfc3339_opts(SecondsFormat::Secs, true),
+            Some(ndt) => DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc)
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
             None => "unknown".to_string(),
         },
         unix_timestamp,

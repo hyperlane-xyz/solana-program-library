@@ -2,41 +2,21 @@
 
 use {
     borsh::{BorshDeserialize, BorshSchema, BorshSerialize},
-    solana_program::{borsh::get_instance_packed_len, program_error::ProgramError, pubkey::Pubkey},
+    solana_program::{
+        borsh0_10::{get_instance_packed_len, try_from_slice_unchecked},
+        program_error::ProgramError,
+        pubkey::Pubkey,
+    },
     spl_discriminator::{ArrayDiscriminator, SplDiscriminate},
-    spl_type_length_value::state::{TlvState, TlvStateBorrowed},
-    std::convert::TryFrom,
+    spl_pod::optional_keys::OptionalNonZeroPubkey,
+    spl_type_length_value::{
+        state::{TlvState, TlvStateBorrowed},
+        variable_len_pack::VariableLenPack,
+    },
 };
 
-/// A Pubkey that encodes `None` as all `0`, meant to be usable as a Pod type,
-/// similar to all NonZero* number types from the bytemuck library.
-#[derive(Clone, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize, BorshSchema)]
-#[repr(transparent)]
-pub struct OptionalNonZeroPubkey(Pubkey);
-impl TryFrom<Option<Pubkey>> for OptionalNonZeroPubkey {
-    type Error = ProgramError;
-    fn try_from(p: Option<Pubkey>) -> Result<Self, Self::Error> {
-        match p {
-            None => Ok(Self(Pubkey::default())),
-            Some(pubkey) => {
-                if pubkey == Pubkey::default() {
-                    Err(ProgramError::InvalidArgument)
-                } else {
-                    Ok(Self(pubkey))
-                }
-            }
-        }
-    }
-}
-impl From<OptionalNonZeroPubkey> for Option<Pubkey> {
-    fn from(p: OptionalNonZeroPubkey) -> Self {
-        if p.0 == Pubkey::default() {
-            None
-        } else {
-            Some(p.0)
-        }
-    }
-}
+#[cfg(feature = "serde-traits")]
+use serde::{Deserialize, Serialize};
 
 /// Data struct for all token-metadata, stored in a TLV entry
 ///
@@ -117,8 +97,21 @@ impl TokenMetadata {
         data.get(start..end)
     }
 }
+impl VariableLenPack for TokenMetadata {
+    fn pack_into_slice(&self, dst: &mut [u8]) -> Result<(), ProgramError> {
+        borsh::to_writer(&mut dst[..], self).map_err(Into::into)
+    }
+    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
+        try_from_slice_unchecked(src).map_err(Into::into)
+    }
+    fn get_packed_len(&self) -> Result<usize, ProgramError> {
+        get_instance_packed_len(self).map_err(Into::into)
+    }
+}
 
 /// Fields in the metadata account, used for updating
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
 pub enum Field {
     /// The name field, corresponding to `TokenMetadata.name`

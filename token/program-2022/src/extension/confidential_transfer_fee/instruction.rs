@@ -1,12 +1,15 @@
-#[cfg(feature = "proof-program")]
-use crate::extension::confidential_transfer::instruction::{
-    verify_withdraw_withheld_tokens, WithdrawWithheldTokensData,
-};
 use {
     crate::{
         check_program_account,
+        error::TokenError,
+        extension::confidential_transfer::{
+            instruction::{
+                verify_ciphertext_ciphertext_equality, CiphertextCiphertextEqualityProofData,
+            },
+            DecryptableBalance,
+        },
         instruction::{encode_instruction, TokenInstruction},
-        pod::OptionalNonZeroPubkey,
+        proof::ProofLocation,
         solana_zk_token_sdk::zk_token_elgamal::pod::ElGamalPubkey,
     },
     bytemuck::{Pod, Zeroable},
@@ -17,10 +20,19 @@ use {
         pubkey::Pubkey,
         sysvar,
     },
+    spl_pod::optional_keys::OptionalNonZeroPubkey,
     std::convert::TryFrom,
 };
 
+#[cfg(feature = "serde-traits")]
+use {
+    crate::serialization::{aeciphertext_fromstr, elgamalpubkey_fromstr},
+    serde::{Deserialize, Serialize},
+};
+
 /// Confidential Transfer extension instructions
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum ConfidentialTransferFeeInstruction {
@@ -46,9 +58,12 @@ pub enum ConfidentialTransferFeeInstruction {
     /// Transfer all withheld confidential tokens in the mint to an account. Signed by the mint's
     /// withdraw withheld tokens authority.
     ///
+    /// The withheld confidential tokens are aggregated directly into the destination available
+    /// balance.
+    ///
     /// In order for this instruction to be successfully processed, it must be accompanied by the
-    /// `VerifyWithdrawWithheldTokens` instruction of the `zk_token_proof` program in the same
-    /// transaction.
+    /// `VerifyCiphertextCiphertextEquality` instruction of the `zk_token_proof` program in the
+    /// same transaction or the address of a context state account for the proof must be provided.
     ///
     /// Accounts expected by this instruction:
     ///
@@ -56,14 +71,18 @@ pub enum ConfidentialTransferFeeInstruction {
     ///   0. `[writable]` The token mint. Must include the `TransferFeeConfig` extension.
     ///   1. `[writable]` The fee receiver account. Must include the `TransferFeeAmount` and
     ///      `ConfidentialTransferAccount` extensions.
-    ///   2. `[]` Instructions sysvar.
+    ///   2. `[]` Instructions sysvar if `VerifyCiphertextCiphertextEquality` is included in the same
+    ///      transaction or context state account if `VerifyCiphertextCiphertextEquality` is
+    ///      pre-verified into a context state account.
     ///   3. `[signer]` The mint's `withdraw_withheld_authority`.
     ///
     ///   * Multisignature owner/delegate
     ///   0. `[writable]` The token mint. Must include the `TransferFeeConfig` extension.
     ///   1. `[writable]` The fee receiver account. Must include the `TransferFeeAmount` and
     ///      `ConfidentialTransferAccount` extensions.
-    ///   2. `[]` Instructions sysvar.
+    ///   2. `[]` Instructions sysvar if `VerifyCiphertextCiphertextEquality` is included in the same
+    ///      transaction or context state account if `VerifyCiphertextCiphertextEquality` is
+    ///      pre-verified into a context state account.
     ///   3. `[]` The mint's multisig `withdraw_withheld_authority`.
     ///   4. ..3+M `[signer]` M signer accounts.
     ///
@@ -75,6 +94,9 @@ pub enum ConfidentialTransferFeeInstruction {
     /// Transfer all withheld tokens to an account. Signed by the mint's withdraw withheld tokens
     /// authority. This instruction is susceptible to front-running. Use
     /// `HarvestWithheldTokensToMint` and `WithdrawWithheldTokensFromMint` as an alternative.
+    ///
+    /// The withheld confidential tokens are aggregated directly into the destination available
+    /// balance.
     ///
     /// Note on front-running: This instruction requires a zero-knowledge proof verification
     /// instruction that is checked with respect to the account state (the currently withheld
@@ -93,7 +115,7 @@ pub enum ConfidentialTransferFeeInstruction {
     ///
     /// In order for this instruction to be successfully processed, it must be accompanied by the
     /// `VerifyWithdrawWithheldTokens` instruction of the `zk_token_proof` program in the same
-    /// transaction.
+    /// transaction or the address of a context state account for the proof must be provided.
     ///
     /// Accounts expected by this instruction:
     ///
@@ -101,7 +123,9 @@ pub enum ConfidentialTransferFeeInstruction {
     ///   0. `[]` The token mint. Must include the `TransferFeeConfig` extension.
     ///   1. `[writable]` The fee receiver account. Must include the `TransferFeeAmount` and
     ///      `ConfidentialTransferAccount` extensions.
-    ///   2. `[]` Instructions sysvar.
+    ///   2. `[]` Instructions sysvar if `VerifyCiphertextCiphertextEquality` is included in the
+    ///      same transaction or context state account if `VerifyCiphertextCiphertextEquality` is
+    ///      pre-verified into a context state account.
     ///   3. `[signer]` The mint's `withdraw_withheld_authority`.
     ///   4. ..3+N `[writable]` The source accounts to withdraw from.
     ///
@@ -109,10 +133,12 @@ pub enum ConfidentialTransferFeeInstruction {
     ///   0. `[]` The token mint. Must include the `TransferFeeConfig` extension.
     ///   1. `[writable]` The fee receiver account. Must include the `TransferFeeAmount` and
     ///      `ConfidentialTransferAccount` extensions.
-    ///   2. `[]` Instructions sysvar.
+    ///   2. `[]` Instructions sysvar if `VerifyCiphertextCiphertextEquality` is included in the
+    ///      same transaction or context state account if `VerifyCiphertextCiphertextEquality` is
+    ///      pre-verified into a context state account.
     ///   3. `[]` The mint's multisig `withdraw_withheld_authority`.
     ///   4. ..4+M `[signer]` M signer accounts.
-    ///   4+M+1. ..3+M+N `[writable]` The source accounts to withdraw from.
+    ///   4+M+1. ..4+M+N `[writable]` The source accounts to withdraw from.
     ///
     /// Data expected by this instruction:
     ///   WithdrawWithheldTokensFromAccountsData
@@ -135,9 +161,45 @@ pub enum ConfidentialTransferFeeInstruction {
     ///   None
     ///
     HarvestWithheldTokensToMint,
+
+    /// Configure a confidential transfer fee mint to accept harvested confidential fees.
+    ///
+    /// Accounts expected by this instruction:
+    ///
+    ///   * Single owner/delegate
+    ///   0. `[writable]` The token mint.
+    ///   1. `[signer]` The confidential transfer fee authority.
+    ///
+    ///   *Multisignature owner/delegate
+    ///   0. `[writable]` The token mint.
+    ///   1. `[]` The confidential transfer fee multisig authority,
+    ///   2. `[signer]` Required M signer accounts for the SPL Token Multisig account.
+    ///
+    /// Data expected by this instruction:
+    ///   None
+    EnableHarvestToMint,
+
+    /// Configure a confidential transfer fee mint to reject any harvested confidential fees.
+    ///
+    /// Accounts expected by this instruction:
+    ///
+    ///   * Single owner/delegate
+    ///   0. `[writable]` The token mint.
+    ///   1. `[signer]` The confidential transfer fee authority.
+    ///
+    ///   *Multisignature owner/delegate
+    ///   0. `[writable]` The token mint.
+    ///   1. `[]` The confidential transfer fee multisig authority,
+    ///   2. `[signer]` Required M signer accounts for the SPL Token Multisig account.
+    ///
+    /// Data expected by this instruction:
+    ///   None
+    DisableHarvestToMint,
 }
 
 /// Data expected by `InitializeConfidentialTransferFeeConfig`
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C)]
 pub struct InitializeConfidentialTransferFeeConfigData {
@@ -145,27 +207,40 @@ pub struct InitializeConfidentialTransferFeeConfigData {
     pub authority: OptionalNonZeroPubkey,
 
     /// ElGamal public key used to encrypt withheld fees.
+    #[cfg_attr(feature = "serde-traits", serde(with = "elgamalpubkey_fromstr"))]
     pub withdraw_withheld_authority_elgamal_pubkey: ElGamalPubkey,
 }
 
 /// Data expected by `ConfidentialTransferFeeInstruction::WithdrawWithheldTokensFromMint`
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C)]
 pub struct WithdrawWithheldTokensFromMintData {
     /// Relative location of the `ProofInstruction::VerifyWithdrawWithheld` instruction to the
-    /// `WithdrawWithheldTokensFromMint` instruction in the transaction
+    /// `WithdrawWithheldTokensFromMint` instruction in the transaction. If the offset is `0`, then
+    /// use a context state account for the proof.
     pub proof_instruction_offset: i8,
+    /// The new decryptable balance in the destination token account.
+    #[cfg_attr(feature = "serde-traits", serde(with = "aeciphertext_fromstr"))]
+    pub new_decryptable_available_balance: DecryptableBalance,
 }
 
 /// Data expected by `ConfidentialTransferFeeInstruction::WithdrawWithheldTokensFromAccounts`
+#[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C)]
 pub struct WithdrawWithheldTokensFromAccountsData {
     /// Number of token accounts harvested
     pub num_token_accounts: u8,
     /// Relative location of the `ProofInstruction::VerifyWithdrawWithheld` instruction to the
-    /// `VerifyWithdrawWithheldTokensFromAccounts` instruction in the transaction
+    /// `VerifyWithdrawWithheldTokensFromAccounts` instruction in the transaction. If the offset is
+    /// `0`, then use a context state account for the proof.
     pub proof_instruction_offset: i8,
+    /// The new decryptable balance in the destination token account.
+    #[cfg_attr(feature = "serde-traits", serde(with = "aeciphertext_fromstr"))]
+    pub new_decryptable_available_balance: DecryptableBalance,
 }
 
 /// Create a `InitializeConfidentialTransferFeeConfig` instruction
@@ -197,17 +272,32 @@ pub fn inner_withdraw_withheld_tokens_from_mint(
     token_program_id: &Pubkey,
     mint: &Pubkey,
     destination: &Pubkey,
+    new_decryptable_available_balance: &DecryptableBalance,
     authority: &Pubkey,
     multisig_signers: &[&Pubkey],
-    proof_instruction_offset: i8,
+    proof_data_location: ProofLocation<CiphertextCiphertextEqualityProofData>,
 ) -> Result<Instruction, ProgramError> {
     check_program_account(token_program_id)?;
     let mut accounts = vec![
         AccountMeta::new(*mint, false),
         AccountMeta::new(*destination, false),
-        AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        AccountMeta::new_readonly(*authority, multisig_signers.is_empty()),
     ];
+
+    let proof_instruction_offset = match proof_data_location {
+        ProofLocation::InstructionOffset(proof_instruction_offset, _) => {
+            accounts.push(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+            proof_instruction_offset.into()
+        }
+        ProofLocation::ContextStateAccount(context_state_account) => {
+            accounts.push(AccountMeta::new_readonly(*context_state_account, false));
+            0
+        }
+    };
+
+    accounts.push(AccountMeta::new_readonly(
+        *authority,
+        multisig_signers.is_empty(),
+    ));
 
     for multisig_signer in multisig_signers.iter() {
         accounts.push(AccountMeta::new(**multisig_signer, false));
@@ -216,49 +306,65 @@ pub fn inner_withdraw_withheld_tokens_from_mint(
     Ok(encode_instruction(
         token_program_id,
         accounts,
-        TokenInstruction::ConfidentialTransferExtension,
+        TokenInstruction::ConfidentialTransferFeeExtension,
         ConfidentialTransferFeeInstruction::WithdrawWithheldTokensFromMint,
         &WithdrawWithheldTokensFromMintData {
             proof_instruction_offset,
+            new_decryptable_available_balance: *new_decryptable_available_balance,
         },
     ))
 }
 
 /// Create an `WithdrawWithheldTokensFromMint` instruction
-#[cfg(feature = "proof-program")]
 pub fn withdraw_withheld_tokens_from_mint(
     token_program_id: &Pubkey,
     mint: &Pubkey,
     destination: &Pubkey,
+    new_decryptable_available_balance: &DecryptableBalance,
     authority: &Pubkey,
     multisig_signers: &[&Pubkey],
-    proof_data: &WithdrawWithheldTokensData,
+    proof_data_location: ProofLocation<CiphertextCiphertextEqualityProofData>,
 ) -> Result<Vec<Instruction>, ProgramError> {
-    Ok(vec![
-        inner_withdraw_withheld_tokens_from_mint(
-            token_program_id,
-            mint,
-            destination,
-            authority,
-            multisig_signers,
-            1,
-        )?,
-        #[cfg(feature = "proof-program")]
-        verify_withdraw_withheld_tokens(proof_data),
-    ])
+    let mut instructions = vec![inner_withdraw_withheld_tokens_from_mint(
+        token_program_id,
+        mint,
+        destination,
+        new_decryptable_available_balance,
+        authority,
+        multisig_signers,
+        proof_data_location,
+    )?];
+
+    if let ProofLocation::InstructionOffset(proof_instruction_offset, proof_data) =
+        proof_data_location
+    {
+        // This constructor appends the proof instruction right after the
+        // `WithdrawWithheldTokensFromMint` instruction. This means that the proof instruction
+        // offset must be always be 1. To use an arbitrary proof instruction offset, use the
+        // `inner_withdraw_withheld_tokens_from_mint` constructor.
+        let proof_instruction_offset: i8 = proof_instruction_offset.into();
+        if proof_instruction_offset != 1 {
+            return Err(TokenError::InvalidProofInstructionOffset.into());
+        }
+        instructions.push(verify_ciphertext_ciphertext_equality(None, proof_data));
+    };
+
+    Ok(instructions)
 }
 
 /// Create an inner `WithdrawWithheldTokensFromMint` instruction
 ///
 /// This instruction is suitable for use with a cross-program `invoke`
+#[allow(clippy::too_many_arguments)]
 pub fn inner_withdraw_withheld_tokens_from_accounts(
     token_program_id: &Pubkey,
     mint: &Pubkey,
     destination: &Pubkey,
+    new_decryptable_available_balance: &DecryptableBalance,
     authority: &Pubkey,
     multisig_signers: &[&Pubkey],
     sources: &[&Pubkey],
-    proof_instruction_offset: i8,
+    proof_data_location: ProofLocation<CiphertextCiphertextEqualityProofData>,
 ) -> Result<Instruction, ProgramError> {
     check_program_account(token_program_id)?;
     let num_token_accounts =
@@ -266,9 +372,23 @@ pub fn inner_withdraw_withheld_tokens_from_accounts(
     let mut accounts = vec![
         AccountMeta::new(*mint, false),
         AccountMeta::new(*destination, false),
-        AccountMeta::new_readonly(sysvar::instructions::id(), false),
-        AccountMeta::new_readonly(*authority, multisig_signers.is_empty()),
     ];
+
+    let proof_instruction_offset = match proof_data_location {
+        ProofLocation::InstructionOffset(proof_instruction_offset, _) => {
+            accounts.push(AccountMeta::new_readonly(sysvar::instructions::id(), false));
+            proof_instruction_offset.into()
+        }
+        ProofLocation::ContextStateAccount(context_state_account) => {
+            accounts.push(AccountMeta::new_readonly(*context_state_account, false));
+            0
+        }
+    };
+
+    accounts.push(AccountMeta::new_readonly(
+        *authority,
+        multisig_signers.is_empty(),
+    ));
 
     for multisig_signer in multisig_signers.iter() {
         accounts.push(AccountMeta::new(**multisig_signer, false));
@@ -281,39 +401,54 @@ pub fn inner_withdraw_withheld_tokens_from_accounts(
     Ok(encode_instruction(
         token_program_id,
         accounts,
-        TokenInstruction::ConfidentialTransferExtension,
+        TokenInstruction::ConfidentialTransferFeeExtension,
         ConfidentialTransferFeeInstruction::WithdrawWithheldTokensFromAccounts,
         &WithdrawWithheldTokensFromAccountsData {
             proof_instruction_offset,
             num_token_accounts,
+            new_decryptable_available_balance: *new_decryptable_available_balance,
         },
     ))
 }
 
 /// Create a `WithdrawWithheldTokensFromAccounts` instruction
-#[cfg(feature = "proof-program")]
+#[allow(clippy::too_many_arguments)]
 pub fn withdraw_withheld_tokens_from_accounts(
     token_program_id: &Pubkey,
     mint: &Pubkey,
     destination: &Pubkey,
+    new_decryptable_available_balance: &DecryptableBalance,
     authority: &Pubkey,
     multisig_signers: &[&Pubkey],
     sources: &[&Pubkey],
-    proof_data: &WithdrawWithheldTokensData,
+    proof_data_location: ProofLocation<CiphertextCiphertextEqualityProofData>,
 ) -> Result<Vec<Instruction>, ProgramError> {
-    Ok(vec![
-        inner_withdraw_withheld_tokens_from_accounts(
-            token_program_id,
-            mint,
-            destination,
-            authority,
-            multisig_signers,
-            sources,
-            1,
-        )?,
-        #[cfg(feature = "proof-program")]
-        verify_withdraw_withheld_tokens(proof_data),
-    ])
+    let mut instructions = vec![inner_withdraw_withheld_tokens_from_accounts(
+        token_program_id,
+        mint,
+        destination,
+        new_decryptable_available_balance,
+        authority,
+        multisig_signers,
+        sources,
+        proof_data_location,
+    )?];
+
+    if let ProofLocation::InstructionOffset(proof_instruction_offset, proof_data) =
+        proof_data_location
+    {
+        // This constructor appends the proof instruction right after the
+        // `WithdrawWithheldTokensFromAccounts` instruction. This means that the proof instruction
+        // offset must always be 1. To use an arbitrary proof instruction offset, use the
+        // `inner_withdraw_withheld_tokens_from_accounts` constructor.
+        let proof_instruction_offset: i8 = proof_instruction_offset.into();
+        if proof_instruction_offset != 1 {
+            return Err(TokenError::InvalidProofInstructionOffset.into());
+        }
+        instructions.push(verify_ciphertext_ciphertext_equality(None, proof_data));
+    };
+
+    Ok(instructions)
 }
 
 /// Creates a `HarvestWithheldTokensToMint` instruction
@@ -332,8 +467,60 @@ pub fn harvest_withheld_tokens_to_mint(
     Ok(encode_instruction(
         token_program_id,
         accounts,
-        TokenInstruction::ConfidentialTransferExtension,
+        TokenInstruction::ConfidentialTransferFeeExtension,
         ConfidentialTransferFeeInstruction::HarvestWithheldTokensToMint,
+        &(),
+    ))
+}
+
+/// Create an `EnableHarvestToMint` instruction
+pub fn enable_harvest_to_mint(
+    token_program_id: &Pubkey,
+    mint: &Pubkey,
+    authority: &Pubkey,
+    multisig_signers: &[&Pubkey],
+) -> Result<Instruction, ProgramError> {
+    check_program_account(token_program_id)?;
+    let mut accounts = vec![
+        AccountMeta::new(*mint, false),
+        AccountMeta::new_readonly(*authority, multisig_signers.is_empty()),
+    ];
+
+    for multisig_signer in multisig_signers.iter() {
+        accounts.push(AccountMeta::new_readonly(**multisig_signer, true));
+    }
+
+    Ok(encode_instruction(
+        token_program_id,
+        accounts,
+        TokenInstruction::ConfidentialTransferFeeExtension,
+        ConfidentialTransferFeeInstruction::EnableHarvestToMint,
+        &(),
+    ))
+}
+
+/// Create a `DisableHarvestToMint` instruction
+pub fn disable_harvest_to_mint(
+    token_program_id: &Pubkey,
+    mint: &Pubkey,
+    authority: &Pubkey,
+    multisig_signers: &[&Pubkey],
+) -> Result<Instruction, ProgramError> {
+    check_program_account(token_program_id)?;
+    let mut accounts = vec![
+        AccountMeta::new(*mint, false),
+        AccountMeta::new_readonly(*authority, multisig_signers.is_empty()),
+    ];
+
+    for multisig_signer in multisig_signers.iter() {
+        accounts.push(AccountMeta::new_readonly(**multisig_signer, true));
+    }
+
+    Ok(encode_instruction(
+        token_program_id,
+        accounts,
+        TokenInstruction::ConfidentialTransferFeeExtension,
+        ConfidentialTransferFeeInstruction::DisableHarvestToMint,
         &(),
     ))
 }

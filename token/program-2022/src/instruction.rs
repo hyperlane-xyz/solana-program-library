@@ -7,7 +7,6 @@ use {
         check_program_account, check_spl_token_program_account,
         error::TokenError,
         extension::{transfer_fee::instruction::TransferFeeInstruction, ExtensionType},
-        pod::{pod_from_bytes, pod_get_packed_len},
     },
     bytemuck::Pod,
     solana_program::{
@@ -17,6 +16,7 @@ use {
         pubkey::{Pubkey, PUBKEY_BYTES},
         system_program, sysvar,
     },
+    spl_pod::bytemuck::{pod_from_bytes, pod_get_packed_len},
     std::{
         convert::{TryFrom, TryInto},
         mem::size_of,
@@ -42,6 +42,10 @@ const U64_BYTES: usize = 8;
 /// Instructions supported by the token program.
 #[repr(C)]
 #[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serde-traits",
+    serde(rename_all_fields = "camelCase", rename_all = "camelCase")
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenInstruction<'a> {
     /// Initializes a new mint and optionally deposits all the newly minted
@@ -420,6 +424,7 @@ pub enum TokenInstruction<'a> {
     ///   2. `[]` Rent sysvar
     InitializeAccount2 {
         /// The new account's owner/multisignature.
+        #[cfg_attr(feature = "serde-traits", serde(with = "As::<DisplayFromStr>"))]
         owner: Pubkey,
     },
     /// Given a wrapped / native token account (a token account containing SOL)
@@ -440,6 +445,7 @@ pub enum TokenInstruction<'a> {
     ///   1. `[]` The mint this account will be associated with.
     InitializeAccount3 {
         /// The new account's owner/multisignature.
+        #[cfg_attr(feature = "serde-traits", serde(with = "As::<DisplayFromStr>"))]
         owner: Pubkey,
     },
     /// Like InitializeMultisig, but does not require the Rent sysvar to be provided
@@ -635,6 +641,7 @@ pub enum TokenInstruction<'a> {
     ///
     InitializePermanentDelegate {
         /// Authority that may sign for `Transfer`s and `Burn`s on any account
+        #[cfg_attr(feature = "serde-traits", serde(with = "As::<DisplayFromStr>"))]
         delegate: Pubkey,
     },
     /// The common instruction prefix for transfer hook extension instructions.
@@ -663,6 +670,12 @@ pub enum TokenInstruction<'a> {
     /// for further details about the extended instructions that share this instruction
     /// prefix
     MetadataPointerExtension,
+    /// The common instruction prefix for group pointer extension instructions.
+    ///
+    /// See `extension::group_pointer::instruction::GroupPointerInstruction`
+    /// for further details about the extended instructions that share this instruction
+    /// prefix
+    GroupPointerExtension,
 }
 impl<'a> TokenInstruction<'a> {
     /// Unpacks a byte buffer into a [TokenInstruction](enum.TokenInstruction.html).
@@ -802,6 +815,7 @@ impl<'a> TokenInstruction<'a> {
             37 => Self::ConfidentialTransferFeeExtension,
             38 => Self::WithdrawExcessLamports,
             39 => Self::MetadataPointerExtension,
+            40 => Self::GroupPointerExtension,
             _ => return Err(TokenError::InvalidInstruction.into()),
         })
     }
@@ -967,6 +981,9 @@ impl<'a> TokenInstruction<'a> {
             &Self::MetadataPointerExtension => {
                 buf.push(39);
             }
+            &Self::GroupPointerExtension => {
+                buf.push(40);
+            }
         };
         buf
     }
@@ -1030,6 +1047,7 @@ impl<'a> TokenInstruction<'a> {
 /// Specifies the authority type for SetAuthority instructions
 #[repr(u8)]
 #[cfg_attr(feature = "serde-traits", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-traits", serde(rename_all = "camelCase"))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthorityType {
     /// Authority to mint new tokens
@@ -1059,6 +1077,8 @@ pub enum AuthorityType {
     ConfidentialTransferFeeConfig,
     /// Authority to set the metadata address
     MetadataPointer,
+    /// Authority to set the group address
+    GroupPointer,
 }
 
 impl AuthorityType {
@@ -1077,6 +1097,7 @@ impl AuthorityType {
             AuthorityType::TransferHookProgramId => 10,
             AuthorityType::ConfidentialTransferFeeConfig => 11,
             AuthorityType::MetadataPointer => 12,
+            AuthorityType::GroupPointer => 13,
         }
     }
 
@@ -1095,6 +1116,7 @@ impl AuthorityType {
             10 => Ok(AuthorityType::TransferHookProgramId),
             11 => Ok(AuthorityType::ConfidentialTransferFeeConfig),
             12 => Ok(AuthorityType::MetadataPointer),
+            13 => Ok(AuthorityType::GroupPointer),
             _ => Err(TokenError::InvalidInstruction.into()),
         }
     }

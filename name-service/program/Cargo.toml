@@ -1,7 +1,7 @@
 [package]
 name = "spl-name-service"
 description = "Solana Program Library Name Service"
-version = "0.2.0"
+version = "0.3.0"
 repository = "https://github.com/solana-labs/solana-program-library"
 authors = [
   "lcchy <lucas@bonfida.com>",
@@ -17,15 +17,15 @@ no-entrypoint = []
 test-sbf = []
 
 [dependencies]
-solana-program = "1.16.1"
+solana-program = "1.17.2"
 num-traits = "0.2"
 borsh = "0.10"
-num-derive = "0.4.0"
-thiserror = "1.0.40"
+num-derive = "0.4.1"
+thiserror = "1.0.50"
 
 [dev-dependencies]
-solana-program-test = "1.16.1"
-solana-sdk = "1.16.1"
+solana-program-test = "1.17.2"
+solana-sdk = "1.17.2"
 
 [lib]
 crate-type = ["cdylib", "lib"]

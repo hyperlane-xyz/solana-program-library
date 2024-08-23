@@ -12,7 +12,6 @@ use {
             StateWithExtensionsMut,
         },
         instruction::{decode_instruction_data, decode_instruction_type},
-        pod::OptionalNonZeroPubkey,
         processor::Processor,
         state::Mint,
     },
@@ -23,6 +22,7 @@ use {
         program_error::ProgramError,
         pubkey::Pubkey,
     },
+    spl_pod::optional_keys::OptionalNonZeroPubkey,
 };
 
 fn process_initialize(
@@ -45,7 +45,7 @@ fn process_initialize(
         }
     } else if Option::<Pubkey>::from(*authority).is_none() {
         msg!("The transfer hook extension requires at least an authority or a program id for initialization, neither was provided");
-        return Err(TokenError::InvalidInstruction)?;
+        Err(TokenError::InvalidInstruction)?;
     }
     extension.program_id = *transfer_hook_program_id;
     Ok(())

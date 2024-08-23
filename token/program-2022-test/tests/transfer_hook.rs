@@ -176,23 +176,25 @@ fn setup_program_test(program_id: &Pubkey) -> ProgramTest {
 
 fn add_validation_account(program_test: &mut ProgramTest, mint: &Pubkey, program_id: &Pubkey) {
     let validation_address = get_extra_account_metas_address(mint, program_id);
-    let account_metas = vec![
+    let extra_account_metas = vec![
         AccountMeta {
             pubkey: Pubkey::new_unique(),
             is_signer: false,
             is_writable: false,
-        },
+        }
+        .into(),
         AccountMeta {
             pubkey: Pubkey::new_unique(),
             is_signer: false,
             is_writable: false,
-        },
+        }
+        .into(),
     ];
     program_test.add_account(
         validation_address,
         Account {
             lamports: 1_000_000_000, // a lot, just to be safe
-            data: spl_transfer_hook_example::state::example_data(&account_metas).unwrap(),
+            data: spl_transfer_hook_example::state::example_data(&extra_account_metas).unwrap(),
             owner: *program_id,
             ..Account::default()
         },
@@ -565,23 +567,25 @@ async fn success_downgrade_writable_and_signer_accounts() {
     let alice = Keypair::new();
     let alice_account = Keypair::new();
     let validation_address = get_extra_account_metas_address(&mint.pubkey(), &program_id);
-    let account_metas = vec![
+    let extra_account_metas = vec![
         AccountMeta {
             pubkey: alice_account.pubkey(),
             is_signer: false,
             is_writable: true,
-        },
+        }
+        .into(),
         AccountMeta {
             pubkey: alice.pubkey(),
             is_signer: true,
             is_writable: false,
-        },
+        }
+        .into(),
     ];
     program_test.add_account(
         validation_address,
         Account {
             lamports: 1_000_000_000, // a lot, just to be safe
-            data: spl_transfer_hook_example::state::example_data(&account_metas).unwrap(),
+            data: spl_transfer_hook_example::state::example_data(&extra_account_metas).unwrap(),
             owner: program_id,
             ..Account::default()
         },
@@ -684,7 +688,7 @@ async fn success_transfers_using_onchain_helper() {
     let (source_b_account, destination_b_account) =
         setup_accounts(&token_b_context, Keypair::new(), Keypair::new(), amount).await;
     let authority_b = token_b_context.alice;
-    let mut account_metas = vec![
+    let account_metas = vec![
         AccountMeta::new(source_a_account, false),
         AccountMeta::new_readonly(mint_a, false),
         AccountMeta::new(destination_a_account, false),
@@ -696,25 +700,34 @@ async fn success_transfers_using_onchain_helper() {
         AccountMeta::new_readonly(authority_b.pubkey(), true),
         AccountMeta::new_readonly(spl_token_2022::id(), false),
     ];
-    offchain::get_extra_transfer_account_metas(
-        &mut account_metas,
+
+    let mut instruction = Instruction::new_with_bytes(swap_program_id, &[], account_metas);
+
+    offchain::resolve_extra_transfer_account_metas(
+        &mut instruction,
         |address| {
-            token_a
-                .get_account(address)
-                .map_ok(|acc| Some(acc.data))
-                .map_err(offchain::AccountFetchError::from)
+            token_a.get_account(address).map_ok_or_else(
+                |e| match e {
+                    TokenClientError::AccountNotFound => Ok(None),
+                    _ => Err(offchain::AccountFetchError::from(e)),
+                },
+                |acc| Ok(Some(acc.data)),
+            )
         },
         &mint_a,
     )
     .await
     .unwrap();
-    offchain::get_extra_transfer_account_metas(
-        &mut account_metas,
+    offchain::resolve_extra_transfer_account_metas(
+        &mut instruction,
         |address| {
-            token_a
-                .get_account(address)
-                .map_ok(|acc| Some(acc.data))
-                .map_err(offchain::AccountFetchError::from)
+            token_a.get_account(address).map_ok_or_else(
+                |e| match e {
+                    TokenClientError::AccountNotFound => Ok(None),
+                    _ => Err(offchain::AccountFetchError::from(e)),
+                },
+                |acc| Ok(Some(acc.data)),
+            )
         },
         &mint_b,
     )
@@ -722,14 +735,7 @@ async fn success_transfers_using_onchain_helper() {
     .unwrap();
 
     token_a
-        .process_ixs(
-            &[Instruction::new_with_bytes(
-                swap_program_id,
-                &[],
-                account_metas,
-            )],
-            &[&authority_a, &authority_b],
-        )
+        .process_ixs(&[instruction], &[&authority_a, &authority_b])
         .await
         .unwrap();
 }

@@ -2,28 +2,50 @@ use {
     crate::{
         error::TokenError,
         extension::{Extension, ExtensionType},
-        pod::*,
     },
     bytemuck::{Pod, Zeroable},
     solana_program::entrypoint::ProgramResult,
     solana_zk_token_sdk::zk_token_elgamal::pod::{AeCiphertext, ElGamalCiphertext, ElGamalPubkey},
+    spl_pod::{
+        bytemuck::pod_from_bytes,
+        optional_keys::{OptionalNonZeroElGamalPubkey, OptionalNonZeroPubkey},
+        primitives::{PodBool, PodU64},
+    },
 };
 
 /// Maximum bit length of any deposit or transfer amount
 ///
 /// Any deposit or transfer amount must be less than 2^48
-pub const MAXIMUM_DEPOSIT_TRANSFER_AMOUNT_BIT_LENGTH: usize = 48;
+pub const MAXIMUM_DEPOSIT_TRANSFER_AMOUNT: u64 = (u16::MAX as u64) + (1 << 16) * (u32::MAX as u64);
 
 /// Bit length of the low bits of pending balance plaintext
-pub const PENDING_BALANCE_LO_BIT_LENGTH: usize = 16;
-/// Bit length of the high bits of pending balance plaintext
-pub const PENDING_BALANCE_HI_BIT_LENGTH: usize = 48;
+pub const PENDING_BALANCE_LO_BIT_LENGTH: u32 = 16;
 
 /// Confidential Transfer Extension instructions
 pub mod instruction;
 
 /// Confidential Transfer Extension processor
 pub mod processor;
+
+/// Helper functions to verify zero-knowledge proofs in the Confidential Transfer Extension
+pub mod verify_proof;
+
+/// Helper functions to generate split zero-knowledge proofs for confidential transfers in the
+/// Confidential Transfer Extension.
+///
+/// The logic in this submodule should belong to the `solana-zk-token-sdk` and will be removed with
+/// the next upgrade to the Solana program.
+#[cfg(not(target_os = "solana"))]
+pub mod split_proof_generation;
+
+/// Confidential Transfer Extension account information needed for instructions
+#[cfg(not(target_os = "solana"))]
+pub mod account_info;
+
+/// Ciphertext extraction and proof related helper logic
+///
+/// This submodule should be removed with the next upgrade to the Solana program
+pub mod ciphertext_extraction;
 
 /// ElGamal ciphertext containing an account balance
 pub type EncryptedBalance = ElGamalCiphertext;
@@ -148,7 +170,7 @@ impl ConfidentialTransferAccount {
     /// A destination account can receive funds if the following conditions are satisfied:
     ///   1. The account is approved by the confidential transfer mint authority
     ///   2. The account is not disabled by the account owner
-    ///   3. The number of credits into the account has reached the maximum credit counter
+    ///   3. The number of credits into the account has not reached the maximum credit counter
     pub fn valid_as_destination(&self) -> ProgramResult {
         self.approved()?;
 

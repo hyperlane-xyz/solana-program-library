@@ -12,7 +12,6 @@ use {
             StateWithExtensionsMut,
         },
         instruction::{decode_instruction_data, decode_instruction_type},
-        pod::OptionalNonZeroPubkey,
         processor::Processor,
         state::Mint,
     },
@@ -22,6 +21,7 @@ use {
         msg,
         pubkey::Pubkey,
     },
+    spl_pod::optional_keys::OptionalNonZeroPubkey,
 };
 
 fn process_initialize(
@@ -42,7 +42,7 @@ fn process_initialize(
         && Option::<Pubkey>::from(*metadata_address).is_none()
     {
         msg!("The metadata pointer extension requires at least an authority or an address for initialization, neither was provided");
-        return Err(TokenError::InvalidInstruction)?;
+        Err(TokenError::InvalidInstruction)?;
     }
     extension.metadata_address = *metadata_address;
     Ok(())

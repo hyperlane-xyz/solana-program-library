@@ -191,7 +191,8 @@ pub fn is_realm_account_type(account_type: &GovernanceAccountType) -> bool {
         | GovernanceAccountType::VoteRecordV1
         | GovernanceAccountType::VoteRecordV2
         | GovernanceAccountType::ProgramMetadata
-        | GovernanceAccountType::ProposalDeposit => false,
+        | GovernanceAccountType::ProposalDeposit
+        | GovernanceAccountType::RequiredSignatory => false,
     }
 }
 
@@ -457,7 +458,7 @@ pub fn assert_valid_realm_config_args(
 mod test {
 
     use crate::instruction::GovernanceInstruction;
-    use solana_program::borsh::try_from_slice_unchecked;
+    use solana_program::borsh0_10::try_from_slice_unchecked;
 
     use super::*;
 

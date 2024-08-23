@@ -21,7 +21,7 @@ use {
 struct MyPodValue {
     data: [u8; 32],
 }
-impl SpleDiscriminates for MyPodValue {
+impl SplDiscriminate for MyPodValue {
     // Give it a unique discriminator, can also be generated using a hash function
     const SPL_DISCRIMINATOR: ArrayDiscriminator = ArrayDiscriminator::new([1; ArrayDiscriminator::LENGTH]);
 }
@@ -56,22 +56,39 @@ let mut buffer = vec![0; account_size];
 let mut state = TlvStateMut::unpack(&mut buffer).unwrap();
 
 // Init and write default value
-let value = state.init_value::<MyPodValue>().unwrap();
+// Note: you'll need to provide a boolean whether or not to allow repeating
+// values with the same TLV discriminator.
+// If set to false, this function will error when an existing entry is detected.
+let value = state.init_value::<MyPodValue>(false).unwrap();
 // Update it in-place
 value.data[0] = 1;
 
 // Init and write another default value
-let other_value = state.init_value::<MyOtherPodValue>().unwrap();
-assert_eq!(other_value.data, 10);
+// This time, we're going to allow repeating values.
+let other_value1 = state.init_value::<MyOtherPodValue>(true).unwrap();
+assert_eq!(other_value1.data, 10);
 // Update it in-place
-other_value.data = 2;
+other_value1.data = 2;
 
-// Later on, to work with it again
-let value = state.get_value_mut::<MyPodValue>().unwrap();
+// Let's do it again, since we can now have repeating values!
+let other_value2 = state.init_value::<MyOtherPodValue>(true).unwrap();
+assert_eq!(other_value2.data, 10);
+// Update it in-place
+other_value1.data = 4;
+
+// Later on, to work with it again, since we did _not_ allow repeating entries,
+// we can just get the first value we encounter.
+let value = state.get_first_value_mut::<MyPodValue>().unwrap();
 
 // Or fetch it from an immutable buffer
 let state = TlvStateBorrowed::unpack(&buffer).unwrap();
-let value = state.get_value::<MyOtherPodValue>().unwrap();
+let value1 = state.get_first_value::<MyOtherPodValue>().unwrap();
+
+// Since we used repeating entries for `MyOtherPodValue`, we can grab either one by
+// its entry number
+let value1 = state.get_value_with_repetition::<MyOtherPodValue>(1).unwrap();
+let value2 = state.get_value_with_repetition::<MyOtherPodValue>(2).unwrap();
+
 ```
 
 ## Motivation
@@ -109,22 +126,40 @@ If not, it reads the next 4-byte length. If the discriminator matches, it return
 the next `length` bytes. If not, it jumps ahead `length` bytes and reads the
 next 8-byte discriminator.
 
-## Borsh integration
+## Serialization of variable-length types
 
 The initial example works using the `bytemuck` crate for zero-copy serialization
-and deserialization. It's possible to use Borsh by activating the `borsh` feature.
+and deserialization. It's possible to use Borsh by implementing the `VariableLenPack`
+trait on your type.
 
 ```rust
 use {
     borsh::{BorshDeserialize, BorshSerialize},
-    spl_type_length_value::state::{TlvState, TlvStateMut},
+    solana_program::borsh::{get_instance_packed_len, try_from_slice_unchecked},
+    spl_type_length_value::{
+        state::{TlvState, TlvStateMut},
+        variable_len_pack::VariableLenPack
+    },
 };
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize)]
-struct MyBorsh {
+struct MyVariableLenType {
     data: String, // variable length type
 }
-impl SplDiscriminate for MyBorsh {
+impl SplDiscriminate for MyVariableLenType {
     const SPL_DISCRIMINATOR: ArrayDiscriminator = ArrayDiscriminator::new([5; ArrayDiscriminator::LENGTH]);
+}
+impl VariableLenPack for MyVariableLenType {
+    fn pack_into_slice(&self, dst: &mut [u8]) -> Result<(), ProgramError> {
+        borsh::to_writer(&mut dst[..], self).map_err(Into::into)
+    }
+
+    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
+        try_from_slice_unchecked(src).map_err(Into::into)
+    }
+
+    fn get_packed_len(&self) -> Result<usize, ProgramError> {
+        get_instance_packed_len(self).map_err(Into::into)
+    }
 }
 let initial_data = "This is a pretty cool test!";
 // Allocate exactly the right size for the string, can go bigger if desired
@@ -137,11 +172,12 @@ let mut buffer = vec![0; account_size];
 let mut state = TlvStateMut::unpack(&mut buffer).unwrap();
 
 // No need to hold onto the bytes since we'll serialize back into the right place
-let _ = state.allocate::<MyBorsh>(tlv_size).unwrap();
-let my_borsh = MyBorsh {
+// For this example, let's _not_ allow repeating entries.
+let _ = state.alloc::<MyVariableLenType>(tlv_size, false).unwrap();
+let my_variable_len = MyVariableLenType {
     data: initial_data.to_string()
 };
-state.borsh_serialize(&my_borsh).unwrap();
-let deser = state.borsh_deserialize::<MyBorsh>().unwrap();
-assert_eq!(deser, my_borsh);
+state.pack_variable_len_value(&my_variable_len).unwrap();
+let deser = state.get_first_variable_len_value::<MyVariableLenType>().unwrap();
+assert_eq!(deser, my_variable_len);
 ```

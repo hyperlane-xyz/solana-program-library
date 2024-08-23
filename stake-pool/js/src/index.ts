@@ -28,6 +28,7 @@ import {
   lamportsToSol,
   solToLamports,
   findEphemeralStakeProgramAddress,
+  findMetadataAddress,
 } from './utils';
 import { StakePoolInstruction } from './instructions';
 import {
@@ -794,6 +795,7 @@ export async function decreaseValidatorStake(
         stakePool: stakePoolAddress,
         staker: stakePool.account.data.staker,
         validatorList: stakePool.account.data.validatorList,
+        reserveStake: stakePool.account.data.reserveStake,
         transientStakeSeed: transientStakeSeed.toNumber(),
         withdrawAuthority,
         validatorStake,
@@ -805,10 +807,11 @@ export async function decreaseValidatorStake(
     );
   } else {
     instructions.push(
-      StakePoolInstruction.decreaseValidatorStake({
+      StakePoolInstruction.decreaseValidatorStakeWithReserve({
         stakePool: stakePoolAddress,
         staker: stakePool.account.data.staker,
         validatorList: stakePool.account.data.validatorList,
+        reserveStake: stakePool.account.data.reserveStake,
         transientStakeSeed: transientStakeSeed.toNumber(),
         withdrawAuthority,
         validatorStake,
@@ -934,8 +937,9 @@ export async function stakePoolInfo(connection: Connection, stakePoolAddress: Pu
     stakePoolAddress,
   );
 
-  const minimumReserveStakeBalance =
-    (await connection.getMinimumBalanceForRentExemption(StakeProgram.space)) + 1;
+  const minimumReserveStakeBalance = await connection.getMinimumBalanceForRentExemption(
+    StakeProgram.space,
+  );
 
   const stakeAccounts = await Promise.all(
     validatorList.account.data.validators.map(async (validator) => {
@@ -1090,6 +1094,7 @@ export async function redelegate(props: RedelegateProps) {
       stakePool: stakePool.pubkey,
       staker: stakePool.account.data.staker,
       validatorList: stakePool.account.data.validatorList,
+      reserveStake: stakePool.account.data.reserveStake,
       stakePoolWithdrawAuthority,
       ephemeralStake,
       ephemeralStakeSeed,
@@ -1101,6 +1106,83 @@ export async function redelegate(props: RedelegateProps) {
       destinationTransientStakeSeed,
       validator: destinationVoteAccount,
       lamports,
+    }),
+  );
+
+  return {
+    instructions,
+  };
+}
+
+/**
+ * Creates instructions required to create pool token metadata.
+ */
+export async function createPoolTokenMetadata(
+  connection: Connection,
+  stakePoolAddress: PublicKey,
+  payer: PublicKey,
+  name: string,
+  symbol: string,
+  uri: string,
+) {
+  const stakePool = await getStakePoolAccount(connection, stakePoolAddress);
+
+  const withdrawAuthority = await findWithdrawAuthorityProgramAddress(
+    STAKE_POOL_PROGRAM_ID,
+    stakePoolAddress,
+  );
+  const tokenMetadata = findMetadataAddress(stakePool.account.data.poolMint);
+  const manager = stakePool.account.data.manager;
+
+  const instructions: TransactionInstruction[] = [];
+  instructions.push(
+    StakePoolInstruction.createTokenMetadata({
+      stakePool: stakePoolAddress,
+      poolMint: stakePool.account.data.poolMint,
+      payer,
+      manager,
+      tokenMetadata,
+      withdrawAuthority,
+      name,
+      symbol,
+      uri,
+    }),
+  );
+
+  return {
+    instructions,
+  };
+}
+
+/**
+ * Creates instructions required to update pool token metadata.
+ */
+export async function updatePoolTokenMetadata(
+  connection: Connection,
+  stakePoolAddress: PublicKey,
+  name: string,
+  symbol: string,
+  uri: string,
+) {
+  const stakePool = await getStakePoolAccount(connection, stakePoolAddress);
+
+  const withdrawAuthority = await findWithdrawAuthorityProgramAddress(
+    STAKE_POOL_PROGRAM_ID,
+    stakePoolAddress,
+  );
+
+  const tokenMetadata = findMetadataAddress(stakePool.account.data.poolMint);
+
+  const instructions: TransactionInstruction[] = [];
+  instructions.push(
+    StakePoolInstruction.updateTokenMetadata({
+      stakePool: stakePoolAddress,
+      manager: stakePool.account.data.manager,
+      tokenMetadata,
+      withdrawAuthority,
+      name,
+      symbol,
+      uri,
     }),
   );
 

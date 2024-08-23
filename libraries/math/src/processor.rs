@@ -1,4 +1,4 @@
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 //! Program state processor
 
 use {
@@ -141,6 +141,18 @@ pub fn process_instruction(
             msg!("Calculating f32 Normal CDF");
             sol_log_compute_units();
             let result = f32_normal_cdf(argument);
+            sol_log_compute_units();
+            msg!("{}", result as u64);
+            Ok(())
+        }
+        MathInstruction::F64Pow { base, exponent } => {
+            msg!("Calculating f64 Pow");
+            sol_log_compute_units();
+            let result = base.powi(exponent as i32);
+            sol_log_compute_units();
+            msg!("{}", result as u64);
+            sol_log_compute_units();
+            let result = base.powf(exponent);
             sol_log_compute_units();
             msg!("{}", result as u64);
             Ok(())

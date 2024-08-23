@@ -6,8 +6,8 @@ use {
         extension::{transfer_hook, StateWithExtensions},
         state::Mint,
     },
-    solana_program::{instruction::AccountMeta, program_error::ProgramError, pubkey::Pubkey},
-    spl_transfer_hook_interface::offchain::get_extra_account_metas,
+    solana_program::{instruction::Instruction, program_error::ProgramError, pubkey::Pubkey},
+    spl_transfer_hook_interface::offchain::resolve_extra_account_metas,
     std::future::Future,
 };
 
@@ -32,23 +32,23 @@ use {
 ///     &mint,
 /// ).await?;
 /// ```
-pub async fn get_extra_transfer_account_metas<F, Fut>(
-    account_metas: &mut Vec<AccountMeta>,
-    get_account_data_fn: F,
+pub async fn resolve_extra_transfer_account_metas<F, Fut>(
+    instruction: &mut Instruction,
+    fetch_account_data_fn: F,
     mint_address: &Pubkey,
 ) -> Result<(), AccountFetchError>
 where
     F: Fn(Pubkey) -> Fut,
     Fut: Future<Output = AccountDataResult>,
 {
-    let mint_data = get_account_data_fn(*mint_address)
+    let mint_data = fetch_account_data_fn(*mint_address)
         .await?
         .ok_or(ProgramError::InvalidAccountData)?;
     let mint = StateWithExtensions::<Mint>::unpack(&mint_data)?;
     if let Some(program_id) = transfer_hook::get_program_id(&mint) {
-        get_extra_account_metas(
-            account_metas,
-            get_account_data_fn,
+        resolve_extra_account_metas(
+            instruction,
+            fetch_account_data_fn,
             mint_address,
             &program_id,
         )

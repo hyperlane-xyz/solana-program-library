@@ -1,4 +1,5 @@
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::items_after_test_module)]
 #![cfg(feature = "test-sbf")]
 
 mod helpers;
@@ -7,11 +8,11 @@ use {
     bincode::deserialize,
     helpers::*,
     solana_program::{
-        borsh::try_from_slice_unchecked, instruction::InstructionError, pubkey::Pubkey, stake,
+        borsh0_10::try_from_slice_unchecked, instruction::InstructionError, pubkey::Pubkey, stake,
     },
     solana_program_test::*,
     solana_sdk::{signature::Signer, transaction::TransactionError},
-    spl_stake_pool::{error::StakePoolError, instruction, state, MINIMUM_RESERVE_LAMPORTS},
+    spl_stake_pool::{error::StakePoolError, instruction, state},
     test_case::test_case,
 };
 
@@ -25,11 +26,11 @@ async fn fail_remove_validator() {
         user_transfer_authority,
         user_stake_recipient,
         _,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), STAKE_ACCOUNT_RENT_EXEMPTION).await;
 
     // decrease a little stake, not all
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &context.last_blockhash,
@@ -37,19 +38,17 @@ async fn fail_remove_validator() {
             &validator_stake.transient_stake_account,
             deposit_info.stake_lamports / 2,
             validator_stake.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // warp forward to deactivation
     let first_normal_slot = context.genesis_config().epoch_schedule.first_normal_slot;
-    let slots_per_epoch = context.genesis_config().epoch_schedule.slots_per_epoch;
-    context
-        .warp_to_slot(first_normal_slot + slots_per_epoch)
-        .unwrap();
+    context.warp_to_slot(first_normal_slot + 1).unwrap();
 
     // update to merge deactivated stake into reserve
-    stake_pool_accounts
+    let error = stake_pool_accounts
         .update_all(
             &mut context.banks_client,
             &context.payer,
@@ -58,6 +57,7 @@ async fn fail_remove_validator() {
             false,
         )
         .await;
+    assert!(error.is_none(), "{:?}", error);
 
     // Withdraw entire account, fail because some stake left
     let validator_stake_account =
@@ -102,7 +102,7 @@ async fn success_remove_validator(multiple: u64) {
         user_transfer_authority,
         user_stake_recipient,
         _,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), STAKE_ACCOUNT_RENT_EXEMPTION).await;
 
     // make pool tokens very valuable, so it isn't possible to exactly get down to the minimum
     transfer(
@@ -124,7 +124,7 @@ async fn success_remove_validator(multiple: u64) {
         .await;
 
     let rent = context.banks_client.get_rent().await.unwrap();
-    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeStateV2>());
     let stake_pool = stake_pool_accounts
         .get_stake_pool(&mut context.banks_client)
         .await;
@@ -132,7 +132,7 @@ async fn success_remove_validator(multiple: u64) {
 
     // decrease all of stake except for lamports_per_pool_token lamports, must be withdrawable
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &context.last_blockhash,
@@ -140,16 +140,14 @@ async fn success_remove_validator(multiple: u64) {
             &validator_stake.transient_stake_account,
             deposit_info.stake_lamports + stake_rent - lamports_per_pool_token,
             validator_stake.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // warp forward to deactivation
     let first_normal_slot = context.genesis_config().epoch_schedule.first_normal_slot;
-    let slots_per_epoch = context.genesis_config().epoch_schedule.slots_per_epoch;
-    context
-        .warp_to_slot(first_normal_slot + slots_per_epoch)
-        .unwrap();
+    context.warp_to_slot(first_normal_slot + 1).unwrap();
 
     let last_blockhash = context
         .banks_client
@@ -196,7 +194,7 @@ async fn success_remove_validator(multiple: u64) {
             pool_tokens,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // Check validator stake account gone
     let validator_stake_account = context
@@ -211,7 +209,7 @@ async fn success_remove_validator(multiple: u64) {
         get_account(&mut context.banks_client, &user_stake_recipient.pubkey()).await;
     assert_eq!(
         user_stake_recipient_account.lamports,
-        remaining_lamports + stake_rent + 1
+        remaining_lamports + stake_rent
     );
 
     // Check that cleanup happens correctly
@@ -244,11 +242,11 @@ async fn fail_with_reserve() {
         user_transfer_authority,
         user_stake_recipient,
         tokens_to_burn,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), STAKE_ACCOUNT_RENT_EXEMPTION).await;
 
     // decrease a little stake, not all
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &context.last_blockhash,
@@ -256,16 +254,14 @@ async fn fail_with_reserve() {
             &validator_stake.transient_stake_account,
             deposit_info.stake_lamports / 2,
             validator_stake.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // warp forward to deactivation
     let first_normal_slot = context.genesis_config().epoch_schedule.first_normal_slot;
-    let slots_per_epoch = context.genesis_config().epoch_schedule.slots_per_epoch;
-    context
-        .warp_to_slot(first_normal_slot + slots_per_epoch)
-        .unwrap();
+    context.warp_to_slot(first_normal_slot + 1).unwrap();
 
     // update to merge deactivated stake into reserve
     stake_pool_accounts
@@ -314,14 +310,14 @@ async fn success_with_reserve() {
         user_transfer_authority,
         user_stake_recipient,
         _,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), STAKE_ACCOUNT_RENT_EXEMPTION).await;
 
     let rent = context.banks_client.get_rent().await.unwrap();
-    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeStateV2>());
 
     // decrease all of stake
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &context.last_blockhash,
@@ -329,16 +325,14 @@ async fn success_with_reserve() {
             &validator_stake.transient_stake_account,
             deposit_info.stake_lamports + stake_rent,
             validator_stake.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // warp forward to deactivation
     let first_normal_slot = context.genesis_config().epoch_schedule.first_normal_slot;
-    let slots_per_epoch = context.genesis_config().epoch_schedule.slots_per_epoch;
-    context
-        .warp_to_slot(first_normal_slot + slots_per_epoch)
-        .unwrap();
+    context.warp_to_slot(first_normal_slot + 1).unwrap();
 
     // update to merge deactivated stake into reserve
     stake_pool_accounts
@@ -366,7 +360,7 @@ async fn success_with_reserve() {
             deposit_info.pool_tokens,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // first and only deposit, lamports:pool 1:1
     let stake_pool = get_account(
@@ -407,10 +401,11 @@ async fn success_with_reserve() {
         &stake_pool_accounts.reserve_stake.pubkey(),
     )
     .await;
-    let stake_state = deserialize::<stake::state::StakeState>(&reserve_stake_account.data).unwrap();
+    let stake_state =
+        deserialize::<stake::state::StakeStateV2>(&reserve_stake_account.data).unwrap();
     let meta = stake_state.meta().unwrap();
     assert_eq!(
-        MINIMUM_RESERVE_LAMPORTS + meta.rent_exempt_reserve + withdrawal_fee + deposit_fee,
+        meta.rent_exempt_reserve + withdrawal_fee + deposit_fee + stake_rent,
         reserve_stake_account.lamports
     );
 
@@ -419,9 +414,7 @@ async fn success_with_reserve() {
         get_account(&mut context.banks_client, &user_stake_recipient.pubkey()).await;
     assert_eq!(
         user_stake_recipient_account.lamports,
-        MINIMUM_RESERVE_LAMPORTS + deposit_info.stake_lamports + stake_rent * 2
-            - withdrawal_fee
-            - deposit_fee
+        deposit_info.stake_lamports + stake_rent * 2 - withdrawal_fee - deposit_fee
     );
 }
 
@@ -435,7 +428,7 @@ async fn success_with_empty_preferred_withdraw() {
         user_transfer_authority,
         user_stake_recipient,
         tokens_to_burn,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), 0).await;
 
     let preferred_validator = simple_add_validator_to_pool(
         &mut context.banks_client,
@@ -471,7 +464,7 @@ async fn success_with_empty_preferred_withdraw() {
             tokens_to_burn / 2,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 }
 
 #[tokio::test]
@@ -484,7 +477,7 @@ async fn success_and_fail_with_preferred_withdraw() {
         user_transfer_authority,
         user_stake_recipient,
         tokens_to_burn,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), 0).await;
 
     let last_blockhash = context
         .banks_client
@@ -567,7 +560,7 @@ async fn success_and_fail_with_preferred_withdraw() {
             tokens_to_burn / 2,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 }
 
 #[tokio::test]
@@ -580,7 +573,7 @@ async fn fail_withdraw_from_transient() {
         user_transfer_authority,
         user_stake_recipient,
         tokens_to_withdraw,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), STAKE_ACCOUNT_RENT_EXEMPTION).await;
 
     let last_blockhash = context
         .banks_client
@@ -615,11 +608,11 @@ async fn fail_withdraw_from_transient() {
         .unwrap();
 
     let rent = context.banks_client.get_rent().await.unwrap();
-    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeStateV2>());
 
     // decrease to minimum stake + 2 lamports
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &last_blockhash,
@@ -627,9 +620,10 @@ async fn fail_withdraw_from_transient() {
             &validator_stake_account.transient_stake_account,
             deposit_info.stake_lamports + stake_rent - 2,
             validator_stake_account.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // fail withdrawing from transient, still a lamport in the validator stake account
     let new_user_authority = Pubkey::new_unique();
@@ -667,7 +661,7 @@ async fn success_withdraw_from_transient() {
         user_transfer_authority,
         user_stake_recipient,
         tokens_to_withdraw,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), STAKE_ACCOUNT_RENT_EXEMPTION).await;
 
     let last_blockhash = context
         .banks_client
@@ -696,7 +690,7 @@ async fn success_withdraw_from_transient() {
         .await;
 
     let rent = context.banks_client.get_rent().await.unwrap();
-    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+    let stake_rent = rent.minimum_balance(std::mem::size_of::<stake::state::StakeStateV2>());
 
     let last_blockhash = context
         .banks_client
@@ -706,7 +700,7 @@ async fn success_withdraw_from_transient() {
 
     // decrease all of stake
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &last_blockhash,
@@ -714,9 +708,10 @@ async fn success_withdraw_from_transient() {
             &validator_stake_account.transient_stake_account,
             deposit_info.stake_lamports + stake_rent,
             validator_stake_account.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // nothing left in the validator stake account (or any others), so withdrawing
     // from the transient account is ok!
@@ -734,7 +729,7 @@ async fn success_withdraw_from_transient() {
             tokens_to_withdraw / 2,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 }
 
 #[tokio::test]
@@ -747,7 +742,7 @@ async fn success_with_small_preferred_withdraw() {
         user_transfer_authority,
         user_stake_recipient,
         tokens_to_burn,
-    ) = setup_for_withdraw(spl_token::id()).await;
+    ) = setup_for_withdraw(spl_token::id(), 0).await;
 
     let last_blockhash = context
         .banks_client
@@ -801,7 +796,7 @@ async fn success_with_small_preferred_withdraw() {
 
     // add a tiny bit of stake, less than lamports per pool token to preferred validator
     let rent = context.banks_client.get_rent().await.unwrap();
-    let rent_exempt = rent.minimum_balance(std::mem::size_of::<stake::state::StakeState>());
+    let rent_exempt = rent.minimum_balance(std::mem::size_of::<stake::state::StakeStateV2>());
     let stake_minimum_delegation =
         stake_get_minimum_delegation(&mut context.banks_client, &context.payer, &last_blockhash)
             .await;
@@ -820,7 +815,7 @@ async fn success_with_small_preferred_withdraw() {
 
     // decrease all stake except for 1 lamport
     let error = stake_pool_accounts
-        .decrease_validator_stake(
+        .decrease_validator_stake_either(
             &mut context.banks_client,
             &context.payer,
             &last_blockhash,
@@ -828,16 +823,14 @@ async fn success_with_small_preferred_withdraw() {
             &preferred_validator.transient_stake_account,
             minimum_lamports,
             preferred_validator.transient_stake_seed,
+            DecreaseInstruction::Reserve,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 
     // warp forward to deactivation
     let first_normal_slot = context.genesis_config().epoch_schedule.first_normal_slot;
-    let slots_per_epoch = context.genesis_config().epoch_schedule.slots_per_epoch;
-    context
-        .warp_to_slot(first_normal_slot + slots_per_epoch)
-        .unwrap();
+    context.warp_to_slot(first_normal_slot + 1).unwrap();
 
     // update to merge deactivated stake into reserve
     stake_pool_accounts
@@ -885,5 +878,5 @@ async fn success_with_small_preferred_withdraw() {
             tokens_to_burn / 6,
         )
         .await;
-    assert!(error.is_none());
+    assert!(error.is_none(), "{:?}", error);
 }
