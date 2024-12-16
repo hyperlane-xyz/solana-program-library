@@ -2371,6 +2371,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "home"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3d1354bf6b7235cb4a0576c2619fd4ed18183f689b12b006a0ee7329eeff9a5"
+dependencies = [
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "honggfuzz"
 version = "0.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7616,6 +7625,7 @@ dependencies = [
  "clap 2.34.0",
  "console",
  "futures 0.3.30",
+ "home",
  "libtest-mimic",
  "serde",
  "serde_derive",
